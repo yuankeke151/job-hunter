@@ -22,9 +22,15 @@ CDP_SCANNER_URL  = f"http://localhost:{CDP_SCANNER_PORT}"
 CDP_CHAT_URL     = f"http://localhost:{CDP_CHAT_PORT}"
 
 # ── AI API (OpenAI-compatible proxy) ─────────────────────────────────────────
-API_BASE_URL = "https://qweapi.com/v1"
-API_KEY      = "sk-B4DMYXeV9090q4XlxGoiH2ypITCgy9J9gmhmEKsNAzwnFDbA"
-AI_MODEL     = "claude-sonnet-4-6"
+# 真实值存放在 confidential.py（已加入 .gitignore，不上传）
+API_BASE_URL = "***"
+API_KEY      = "***"
+AI_MODEL     = "***"
+
+try:
+    from confidential import API_BASE_URL, API_KEY, AI_MODEL  # noqa: F811
+except ImportError:
+    pass  # CI / 首次克隆时占位符生效，运行前请创建 src/confidential.py
 
 # ── Search parameters ─────────────────────────────────────────────────────────
 SEARCH_KEYWORDS      = ["数据分析师", "BI分析师", "产品数据分析师"]

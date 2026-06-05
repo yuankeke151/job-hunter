@@ -8,6 +8,17 @@
 pip install -r requirements.txt
 ```
 
+## 首次配置
+
+克隆后需手动创建 `src/confidential.py`（该文件不上传 GitHub）：
+
+```python
+# src/confidential.py
+API_BASE_URL = "https://your-api-endpoint/v1"
+API_KEY      = "sk-..."
+AI_MODEL     = "claude-sonnet-4-6"
+```
+
 ## 使用方法
 
 ### 1. 职位扫描（job_scanner）
@@ -50,7 +61,7 @@ python src/chat/handler.py
 
 | 常量 | 说明 |
 |------|------|
-| `API_KEY` | AI API 密钥 |
+| `API_KEY` | AI API 密钥（在 `confidential.py` 中配置） |
 | `SCORE_THRESHOLD` | AI 匹配分阈值，≥ 此分值才发起沟通（默认 70） |
 | `MAX_GREET` | 单次运行最多打招呼数量（默认 10） |
 | `CONTINUOUS_POLL` | `True` 持续轮询；`False` 处理一次后退出 |

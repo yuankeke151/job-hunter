@@ -14,6 +14,9 @@ screenshots/**
 output_resumes/**
 !output_resumes/.gitkeep
 
+# 敏感配置（API Key 等）
+src/confidential.py
+
 # Python 缓存
 __pycache__/
 *.py[cod]

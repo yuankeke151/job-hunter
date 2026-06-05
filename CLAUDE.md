@@ -51,10 +51,21 @@ def cdp_click(tab, x, y):
 
 | 项目 | 值 |
 |------|----|
-| 接口地址 | `https://qweapi.com/v1` |
-| API Key | 见 `config.py` |
-| 使用模型 | `claude-sonnet-4-6` |
+| 接口地址 | 见 `src/confidential.py` |
+| API Key | 见 `src/confidential.py` |
+| 使用模型 | 见 `src/confidential.py` |
 | 协议格式 | OpenAI Chat Completions 兼容，使用 `openai` SDK |
+
+`src/confidential.py` 已加入 `.gitignore`，不上传 GitHub。首次克隆后需手动创建：
+
+```python
+# src/confidential.py
+API_BASE_URL = "https://..."
+API_KEY      = "sk-..."
+AI_MODEL     = "claude-sonnet-4-6"
+```
+
+`config.py` 通过 `try/except ImportError` 自动加载该文件，覆盖占位符 `"***"`。
 
 ---
 
@@ -67,6 +78,7 @@ job-hunter/
 ├── requirements.txt             # 依赖列表
 ├── src/
 │   ├── config.py                # 全局配置（BASE_DIR 指向 job-hunter/）
+│   ├── confidential.py          # 敏感配置：API Key 等（.gitignore，不上传）
 │   ├── scanner/                 # job_scanner 全部逻辑
 │   │   ├── __init__.py
 │   │   ├── scanner.py           # 入口（原 job_scanner.py）
