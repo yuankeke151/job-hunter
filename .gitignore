@@ -1,0 +1,30 @@
+# 以下目录只保留目录本身，内部文件一概不上传
+browser_data/**
+!browser_data/.gitkeep
+browser_data_chat/**
+!browser_data_chat/.gitkeep
+records/**
+!records/.gitkeep
+logs/**
+!logs/.gitkeep
+resume/**
+!resume/.gitkeep
+screenshots/**
+!screenshots/.gitkeep
+output_resumes/**
+!output_resumes/.gitkeep
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 系统文件
+.DS_Store
+Thumbs.db
