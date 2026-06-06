@@ -1,6 +1,8 @@
 import time
 import random
 import json
+import requests
+from shared.logger import log
 
 
 def evaluate(tab, js: str):
@@ -9,7 +11,7 @@ def evaluate(tab, js: str):
                               returnByValue=True, timeout=15)
         return ret.get("result", {}).get("value")
     except Exception as e:
-        print(f"  [JS错误] {e}")
+        log.error(f"  [JS错误] {e}")
         return None
 
 
@@ -21,6 +23,41 @@ def cdp_click(tab, x: float, y: float):
 
 def random_delay(lo: float = 1.0, hi: float = 3.0):
     time.sleep(random.uniform(lo, hi))
+
+
+def cdp_wheel(tab, x: float, y: float, delta_y: int):
+    """发送 mouseWheel 事件。delta_y > 0 向下，< 0 向上。"""
+    tab.call_method(
+        "Input.dispatchMouseEvent",
+        type="mouseWheel",
+        x=x, y=y,
+        deltaX=0, deltaY=delta_y,
+        modifiers=0,
+    )
+
+
+def is_browser_alive(cdp_url: str) -> bool:
+    """检测 CDP 端口是否可达（浏览器是否还在运行）。"""
+    try:
+        return requests.get(f"{cdp_url}/json", timeout=3).status_code == 200
+    except Exception:
+        return False
+
+
+def small_human_scroll(tab, lo: int = 80, hi: int = 280):
+    """点击前模拟人类浏览时的小幅随机滚动，随机方向。"""
+    direction = random.choice([1, -1])
+    delta     = random.randint(lo, hi)
+    tab.call_method(
+        "Input.dispatchMouseEvent",
+        type="mouseWheel",
+        x=random.randint(600, 900),
+        y=random.randint(300, 500),
+        deltaX=0,
+        deltaY=direction * delta,
+        modifiers=0,
+    )
+    time.sleep(random.uniform(0.2, 0.6))
 
 
 # ── 消息读取 ──────────────────────────────────────────────────────────────────

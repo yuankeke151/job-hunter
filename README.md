@@ -35,7 +35,7 @@ start_chrome_job.bat
 python src/scanner/scanner.py
 ```
 
-脚本将自动扫描职位列表、AI 匹配分析、发起沟通。
+脚本将自动扫描职位列表；AI 分析和打招呼可通过 `SCAN_API_ENABLED` / `SCAN_GREET_ENABLED` 开关控制。
 
 ---
 
@@ -62,11 +62,17 @@ python src/chat/handler.py
 | 常量 | 说明 |
 |------|------|
 | `API_KEY` | AI API 密钥（在 `confidential.py` 中配置） |
-| `SCORE_THRESHOLD` | AI 匹配分阈值，≥ 此分值才发起沟通（默认 70） |
-| `MAX_GREET` | 单次运行最多打招呼数量（默认 10） |
+| `SCORE_THRESHOLD` | AI 匹配分阈值，≥ 此分值才推荐投递（默认 70） |
+| `MAX_SCAN` | 单次运行最多扫描岗位数，达到后停止（默认 100） |
+| `SCAN_API_ENABLED` | `True` 调用 AI 分析匹配度；`False` 跳过（默认 `False`） |
+| `SCAN_GREET_ENABLED` | `True` 点击「立即沟通」；`False` 只扫描不打招呼（默认 `False`） |
 | `CONTINUOUS_POLL` | `True` 持续轮询；`False` 处理一次后退出 |
 | `REPLY_ENABLED` | `False` 时只做卡片同意和发简历，不发消息 |
 | `SEND_ENABLED` | `False` 时消息打入输入框但不点击发送 |
+
+## 日志
+
+运行日志同时输出到控制台（INFO 级别）和 `logs/app.log`（DEBUG 级别，滚动保留 5MB×3 个文件）。
 
 ## 注意事项
 

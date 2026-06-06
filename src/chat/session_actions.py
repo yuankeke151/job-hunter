@@ -7,6 +7,7 @@ from config import (API_KEY, API_BASE_URL, AI_MODEL,
                     FIXED_SELF_INTRO, FIXED_FOLLOWUP, DISCLAIMER,
                     REPLY_ENABLED, SEND_ENABLED)
 from shared.cdp_utils import evaluate, cdp_click, random_delay, read_messages
+from shared.logger import log
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 
@@ -105,10 +106,10 @@ def call_ai_self_promo(boss_info: dict, jd: str, resume: str) -> str:
         )
         result = (resp.choices[0].message.content or "").strip()
         if not result:
-            print("  [AI] 自我推荐响应为空")
+            log.warning("  [AI] 自我推荐响应为空")
         return result
     except Exception as e:
-        print(f"  [AI] 自我推荐生成失败: {e}")
+        log.error(f"  [AI] 自我推荐生成失败: {e}")
         return ""
 
 
@@ -150,12 +151,12 @@ def call_ai(
         )
         raw = (resp.choices[0].message.content or "").strip()
         if not raw:
-            print("  [AI] 响应为空，跳过")
+            log.warning("  [AI] 响应为空，跳过")
             return _empty
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw).strip()
         if not raw:
-            print("  [AI] 响应去除代码块后为空，跳过")
+            log.warning("  [AI] 响应去除代码块后为空，跳过")
             return _empty
         result = json.loads(raw)
         return {
@@ -165,10 +166,10 @@ def call_ai(
             "reasoning"      : result.get("reasoning", ""),
         }
     except json.JSONDecodeError as e:
-        print(f"  [AI] JSON 解析失败: {e}  原始响应: {raw!r:.100}")
+        log.error(f"  [AI] JSON 解析失败: {e}  原始响应: {raw!r:.100}")
         return _empty
     except Exception as e:
-        print(f"  [AI] 调用失败: {e}")
+        log.error(f"  [AI] 调用失败: {e}")
         return _empty
 
 
@@ -216,7 +217,7 @@ def click_send(tab):
             return True
         except Exception:
             pass
-    print("  [发送] 按钮不可用，取消发送")
+    log.warning("  [发送] 按钮不可用，取消发送")
     return False
 
 
@@ -230,7 +231,7 @@ def handle_resume_dialog(tab) -> bool:
       选中态   : [class*="select-one"] 出现
       确认按钮 : .btn-confirm  text='发送'
     """
-    print("  [简历弹窗] 等待弹窗出现...")
+    log.info("  [简历弹窗] 等待弹窗出现...")
 
     for _ in range(10):
         time.sleep(0.5)
@@ -245,10 +246,10 @@ def handle_resume_dialog(tab) -> bool:
         })()
         """
         if evaluate(tab, js_check) == "visible":
-            print("  [简历弹窗] 检测到弹窗 (.boss-popup__wrapper)")
+            log.info("  [简历弹窗] 检测到弹窗 (.boss-popup__wrapper)")
             break
     else:
-        print("  [简历弹窗] 等待超时，弹窗未出现")
+        log.warning("  [简历弹窗] 等待超时，弹窗未出现")
         return False
 
     time.sleep(0.5)
@@ -292,17 +293,17 @@ def handle_resume_dialog(tab) -> bool:
     """
     val = evaluate(tab, js_find)
     if not val or val == "null":
-        print("  [简历弹窗] ✗ 未找到「袁柯」简历项")
+        log.warning("  [简历弹窗] ✗ 未找到「袁柯」简历项")
         return False
 
     try:
         item = json.loads(val)
-        print(f"  [简历弹窗] ✓ 点击简历: {item['txt']!r}  "
-              f"cls={item['cls']!r}  center=({item['x']},{item['y']})")
+        log.info(f"  [简历弹窗] ✓ 点击简历: {item['txt']!r}  "
+                 f"cls={item['cls']!r}  center=({item['x']},{item['y']})")
         cdp_click(tab, item["x"], item["y"])
         time.sleep(0.8)
     except Exception as e:
-        print(f"  [简历弹窗] 点击简历项失败: {e}")
+        log.error(f"  [简历弹窗] 点击简历项失败: {e}")
         return False
 
     js_confirm = """
@@ -337,18 +338,18 @@ def handle_resume_dialog(tab) -> bool:
 
     val2 = evaluate(tab, js_confirm)
     if not val2 or val2 == "null":
-        print("  [简历弹窗] ✗ 未找到「发送」确认按钮")
+        log.warning("  [简历弹窗] ✗ 未找到「发送」确认按钮")
         return False
 
     try:
         btn = json.loads(val2)
-        print(f"  [简历弹窗] ✓ 点击确认: {btn['txt']!r}  cls={btn['cls']!r}  "
-              f"center=({btn['x']},{btn['y']})")
+        log.info(f"  [简历弹窗] ✓ 点击确认: {btn['txt']!r}  cls={btn['cls']!r}  "
+                 f"center=({btn['x']},{btn['y']})")
         cdp_click(tab, btn["x"], btn["y"])
         random_delay(1.5, 2.5)
         return True
     except Exception as e:
-        print(f"  [简历弹窗] 点击确认失败: {e}")
+        log.error(f"  [简历弹窗] 点击确认失败: {e}")
         return False
 
 
@@ -372,10 +373,10 @@ def click_resume_btn(tab) -> bool:
     """
     val = evaluate(tab, js_btn)
     if not val or val == "null":
-        print("  [发简历] 未找到工具栏按钮")
+        log.warning("  [发简历] 未找到工具栏按钮")
         return False
     btn = json.loads(val)
-    print(f"  [发简历] 点击按钮 center=({btn['x']},{btn['y']})")
+    log.info(f"  [发简历] 点击按钮 center=({btn['x']},{btn['y']})")
     cdp_click(tab, btn["x"], btn["y"])
     random_delay(1.0, 1.5)
     return handle_resume_dialog(tab)
@@ -468,10 +469,10 @@ def handle_interactive_cards(tab) -> bool:
         return False
 
     has_resume = any(c["cardType"] == "resume" for c in cards)
-    print(f"  [卡片交互] 共 {x} 张可点击同意卡片  含简历卡: {has_resume}")
+    log.info(f"  [卡片交互] 共 {x} 张可点击同意卡片  含简历卡: {has_resume}")
     for c in cards:
         label = _CARD_TYPE_LABEL.get(c["cardType"], f"未知({c['cardType']})")
-        print(f"    {label}  center=({c['x']},{c['y']})")
+        log.info(f"    {label}  center=({c['x']},{c['y']})")
 
     # ── 循环点击非简历卡片 ────────────────────────────────────────────────────
     click_count = x - 1 if has_resume else x
@@ -479,12 +480,12 @@ def handle_interactive_cards(tab) -> bool:
         # 每轮重新读取，跳过 resume 类型，取第一个
         fresh = [c for c in _read_agree_cards(tab) if c["cardType"] != "resume"]
         if not fresh:
-            print(f"  [卡片交互] 第 {i+1} 轮：非简历卡片已全部处理，提前结束")
+            log.info(f"  [卡片交互] 第 {i+1} 轮：非简历卡片已全部处理，提前结束")
             break
         card  = fresh[0]
         label = _CARD_TYPE_LABEL.get(card["cardType"], f"未知({card['cardType']})")
-        print(f"  [卡片交互] 点击第 {i+1}/{click_count} 张「{label}」"
-              f"  center=({card['x']},{card['y']})")
+        log.info(f"  [卡片交互] 点击第 {i+1}/{click_count} 张「{label}」"
+                 f"  center=({card['x']},{card['y']})")
         cdp_click(tab, card["x"], card["y"])
         random_delay(1.5, 2.5)
 
@@ -494,11 +495,11 @@ def handle_interactive_cards(tab) -> bool:
     # ── 重新读取简历卡坐标，点击「同意」并处理弹窗 ───────────────────────────
     resume_cards = [c for c in _read_agree_cards(tab) if c["cardType"] == "resume"]
     if not resume_cards:
-        print("  [卡片交互] 重新读取：简历请求卡片已消失或已处理")
+        log.info("  [卡片交互] 重新读取：简历请求卡片已消失或已处理")
         return False
 
     card = resume_cards[0]
-    print(f"  [卡片交互] 点击简历请求「同意」  center=({card['x']},{card['y']})")
+    log.info(f"  [卡片交互] 点击简历请求「同意」  center=({card['x']},{card['y']})")
     cdp_click(tab, card["x"], card["y"])
     random_delay(1.0, 1.5)
     return handle_resume_dialog(tab)
@@ -536,29 +537,30 @@ def execute_session_actions(
         None
     )
 
-    def _print_box(title, text):
-        print(f"\n  ┌─ {title} " + "─" * max(0, 54 - len(title)))
+    def _log_box(title, text):
+        bar = "─" * max(0, 54 - len(title))
+        log.info(f"  ┌─ {title} {bar}")
         for line in text.split("\n"):
-            print(f"  │  {line}")
-        print("  └" + "─" * 57)
+            log.info(f"  │  {line}")
+        log.info("  └" + "─" * 57)
 
     def _type_and_log(tab, text, shot_suffix):
         if not REPLY_ENABLED:
-            _print_box("跳过发送（REPLY_ENABLED=False）", text + DISCLAIMER)
+            _log_box("跳过发送（REPLY_ENABLED=False）", text + DISCLAIMER)
             return
         full_text = text + DISCLAIMER
         clear_and_type(tab, full_text)
-        _print_box("打入输入框内容", full_text)
+        _log_box("打入输入框内容", full_text)
         random_delay(1.5, 2.5)
         if not SEND_ENABLED:
-            print("  → SEND_ENABLED=False，消息已打入输入框但不点击发送")
+            log.info("  → SEND_ENABLED=False，消息已打入输入框但不点击发送")
             return
         sent = click_send(tab)
         if sent:
-            print("  → 消息已发送")
+            log.info("  → 消息已发送")
             random_delay(1.0, 1.5)
         else:
-            print("  → 发送按钮不可用，消息留在输入框")
+            log.info("  → 发送按钮不可用，消息留在输入框")
 
     # ══════════════════════════════════════════════════════════════════════════
     # Step 1：处理所有可点击「同意」的交互卡片（无条件，优先于所有分支）
@@ -571,11 +573,11 @@ def execute_session_actions(
 
     if not has_jd:
         label_nojd = "未在 jobs 表" if not chat_info.get("encryptJobId") else "JD 为空"
-        print(f"\n  [无JD] {label_nojd}")
+        log.info(f"  [无JD] {label_nojd}")
 
         if not my_texts:
             # 无JD-C: boss 主动发起，我方无消息
-            print("  [无JD-C] Boss 主动发起，我方无消息 → 发简历 + 固定自我介绍")
+            log.info("  [无JD-C] Boss 主动发起，我方无消息 → 发简历 + 固定自我介绍")
             if not resume_sent_now:
                 ok = execute_resume_action(tab)
                 if ok:
@@ -585,14 +587,14 @@ def execute_session_actions(
 
         elif not boss_texts:
             # 无JD-A: 我主动发起，boss 未回复
-            print("  [无JD-A] 我方主动发起，Boss 未回复 → 固定跟进话术")
+            log.info("  [无JD-A] 我方主动发起，Boss 未回复 → 固定跟进话术")
             _type_and_log(tab, FIXED_FOLLOWUP, company[:10])
 
         else:
             # 无JD-B: 双方均有消息
-            print("\n  [无JD-B] 双方均有消息")
+            log.info("  [无JD-B] 双方均有消息")
             if resume_already_sent or resume_sent_now:
-                print("  → 简历已投递过，跳过简历环节")
+                log.info("  → 简历已投递过，跳过简历环节")
             else:
                 ok = execute_resume_action(tab)
                 if ok:
@@ -601,25 +603,25 @@ def execute_session_actions(
 
             need_self_promo = resume_sent_now == 1
             need_reply      = last_is_boss
-            print(f"  需要自我推荐: {'是' if need_self_promo else '否'}")
-            print(f"  需要回复:     {'是' if need_reply else '否'}"
-                  f"{'（最后发言是我）' if _last_text_msg and _last_text_msg['isSelf'] else ''}")
+            log.info(f"  需要自我推荐: {'是' if need_self_promo else '否'}")
+            log.info(f"  需要回复:     {'是' if need_reply else '否'}"
+                     f"{'（最后发言是我）' if _last_text_msg and _last_text_msg['isSelf'] else ''}")
             if need_reply and _last_text_msg:
-                print(f"  最新Boss消息: {_last_text_msg['text'][:50]!r}")
+                log.info(f"  最新Boss消息: {_last_text_msg['text'][:50]!r}")
 
             if not REPLY_ENABLED:
-                print("  [AI] REPLY_ENABLED=False，跳过 API 调用和消息发送")
+                log.info("  [AI] REPLY_ENABLED=False，跳过 API 调用和消息发送")
             elif not need_self_promo and not need_reply:
-                print("  [AI] 无需自我推荐也无需回复，跳过 API 调用")
+                log.info("  [AI] 无需自我推荐也无需回复，跳过 API 调用")
             else:
-                print("  [AI] 分析中（无JD）...")
+                log.info("  [AI] 分析中（无JD）...")
                 ai_result = call_ai(
                     chat_info, "", resume, messages,
                     need_reply=need_reply,
                     need_self_promo=need_self_promo,
                 )
-                print(f"  [AI] 倾向分: {ai_result['tendency_score']}/100"
-                      f"  {ai_result['reasoning']}")
+                log.info(f"  [AI] 倾向分: {ai_result['tendency_score']}/100"
+                         f"  {ai_result['reasoning']}")
                 if need_self_promo and ai_result.get("self_promo"):
                     _type_and_log(tab, ai_result["self_promo"], company[:10])
                     if need_reply and ai_result.get("reply"):
@@ -629,23 +631,23 @@ def execute_session_actions(
 
     elif not boss_texts:
         # 模式A（有JD）: 仅我方有消息，Boss 尚未回复
-        print("\n  [模式A] 有JD，Boss 尚未回复 → API 自我推荐")
+        log.info("  [模式A] 有JD，Boss 尚未回复 → API 自我推荐")
         if not REPLY_ENABLED:
-            print("  [AI] REPLY_ENABLED=False，跳过 API 调用和消息发送")
+            log.info("  [AI] REPLY_ENABLED=False，跳过 API 调用和消息发送")
         else:
-            print("  [AI] 生成自我推荐中...")
+            log.info("  [AI] 生成自我推荐中...")
             promo = call_ai_self_promo(chat_info, jd, resume)
             if promo:
-                print(f"  [AI] 生成成功（{len(promo)} 字）")
+                log.info(f"  [AI] 生成成功（{len(promo)} 字）")
                 _type_and_log(tab, promo, company[:10])
             else:
-                print("  [AI] 生成结果为空，跳过")
+                log.info("  [AI] 生成结果为空，跳过")
 
     else:
         # 模式B（有JD）: 双方均有消息
-        print("\n  [模式B] 有JD，双方均有消息")
+        log.info("  [模式B] 有JD，双方均有消息")
         if resume_already_sent or resume_sent_now:
-            print("  → 简历已投递过，跳过简历环节")
+            log.info("  → 简历已投递过，跳过简历环节")
         else:
             ok = execute_resume_action(tab)
             if ok:
@@ -654,24 +656,24 @@ def execute_session_actions(
 
         need_self_promo = resume_sent_now == 1
         need_reply      = last_is_boss
-        print(f"  需要自我推荐: {'是' if need_self_promo else '否'}")
-        print(f"  需要回复:     {'是' if need_reply else '否'}"
-              f"{'（最后发言是我）' if _last_text_msg and _last_text_msg['isSelf'] else ''}")
+        log.info(f"  需要自我推荐: {'是' if need_self_promo else '否'}")
+        log.info(f"  需要回复:     {'是' if need_reply else '否'}"
+                 f"{'（最后发言是我）' if _last_text_msg and _last_text_msg['isSelf'] else ''}")
         if need_reply and _last_text_msg:
-            print(f"  最新Boss消息: {_last_text_msg['text'][:50]!r}")
+            log.info(f"  最新Boss消息: {_last_text_msg['text'][:50]!r}")
 
         if not REPLY_ENABLED:
-            print("  [AI] REPLY_ENABLED=False，跳过 API 调用和消息发送")
+            log.info("  [AI] REPLY_ENABLED=False，跳过 API 调用和消息发送")
         elif not need_self_promo and not need_reply:
-            print("  [AI] 无需自我推荐也无需回复，跳过 API 调用")
+            log.info("  [AI] 无需自我推荐也无需回复，跳过 API 调用")
         else:
-            print("  [AI] 分析中...")
+            log.info("  [AI] 分析中...")
             ai_result = call_ai(
                 chat_info, jd, resume, messages,
                 need_reply=need_reply,
                 need_self_promo=need_self_promo,
             )
-            print(f"  [AI] 倾向分: {ai_result['tendency_score']}/100  {ai_result['reasoning']}")
+            log.info(f"  [AI] 倾向分: {ai_result['tendency_score']}/100  {ai_result['reasoning']}")
             if need_self_promo and ai_result.get("self_promo"):
                 _type_and_log(tab, ai_result["self_promo"], company[:10])
                 if need_reply and ai_result.get("reply"):

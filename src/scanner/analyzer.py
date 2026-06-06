@@ -6,7 +6,6 @@ analyzer.py — 第三阶段：Claude API 匹配度分析
 """
 import sys
 import json
-import logging
 import re
 from pathlib import Path
 
@@ -15,8 +14,7 @@ from openai import OpenAI
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import API_KEY, API_BASE_URL, AI_MODEL, RESUME_PATH, SCORE_THRESHOLD
-
-logger = logging.getLogger(__name__)
+from shared.logger import log as logger
 
 _RESUME_TXT = RESUME_PATH.with_suffix(".txt")
 _resume_cache: str = ""

@@ -32,29 +32,17 @@ try:
 except ImportError:
     pass  # CI / 首次克隆时占位符生效，运行前请创建 src/confidential.py
 
-# ── Search parameters ─────────────────────────────────────────────────────────
-SEARCH_KEYWORDS      = ["数据分析师", "BI分析师", "产品数据分析师"]
-CITY_CODE            = "101010100"   # 北京
-CITY_NAME            = "北京"
-SALARY_MIN_K         = 15            # 最低薪资 (K)
-MAX_PAGES_PER_KEYWORD = 3            # 每个关键词最多翻几页
-
 # ── Matching ──────────────────────────────────────────────────────────────────
 SCORE_THRESHOLD = 70
-
-# ── Timing ────────────────────────────────────────────────────────────────────
-DELAY_MIN = 8    # seconds
-DELAY_MAX = 20
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 DB_PATH     = RECORDS_DIR / "jobs.db"
 RESUME_PATH = RESUME_DIR  / "袁柯.pdf"
 LOG_PATH    = LOGS_DIR    / "app.log"
 
-# ── BOSS直聘 URLs ──────────────────────────────────────────────────────────────
-BOSS_BASE_URL   = "https://www.zhipin.com"
-BOSS_SEARCH_URL = f"{BOSS_BASE_URL}/web/geek/job"
-BOSS_INBOX_URL  = f"{BOSS_BASE_URL}/web/im/"
+# ── Scanner 行为开关 ──────────────────────────────────────────────────────────
+SCAN_API_ENABLED   = False  # True=调用 AI API 分析匹配度；False=跳过，score=0
+SCAN_GREET_ENABLED = False  # True=点击「立即沟通」并处理弹窗；False=只扫描不打招呼
 
 # ── 聊天模块运行参数 ──────────────────────────────────────────────────────────
 POLL_LIMIT        = 1    # 单轮最多处理会话数（调试=1，生产=50）

@@ -8,6 +8,7 @@ from config import (DB_PATH, RESUME_PATH, CHAT_MAX_AGE_DAYS)
 from shared.cdp_utils import evaluate, read_messages
 from shared.database import (get_chat, upsert_chat, save_job_from_chat,
                               get_job_by_encrypt_id)
+from shared.logger import log
 from chat.session_actions import execute_session_actions
 
 # ── 简历缓存 ──────────────────────────────────────────────────────────────────
@@ -60,7 +61,7 @@ def load_resume() -> str:
             _resume_cache = "\n".join(p.extract_text() or "" for p in pdf.pages)
         txt.write_text(_resume_cache, encoding="utf-8")
         return _resume_cache
-    print("  [简历] 未找到简历文件")
+    log.warning("  [简历] 未找到简历文件")
     return ""
 
 
@@ -139,9 +140,9 @@ def process_session(tab, session_info: dict | None = None):
     session_info: 来自左侧会话卡片的基本信息（可为 None）。
     """
     label = session_info["name"] if session_info else "当前会话"
-    print(f"\n{'='*60}")
-    print(f"  处理会话：{label}")
-    print(f"{'='*60}")
+    log.info(f"{'='*60}")
+    log.info(f"  处理会话：{label}")
+    log.info(f"{'='*60}")
 
     try:
         # ══════════════════════════════════════════════════════════════
@@ -154,30 +155,30 @@ def process_session(tab, session_info: dict | None = None):
         company        = chat_info.get("companyName", "") or (session_info or {}).get("company", "")
         boss_title     = chat_info.get("title",       "") or (session_info or {}).get("title",   "")
         boss_name      = chat_info.get("name",        "") or (session_info or {}).get("name",    "")
-        print(f"  公司: {company}  Boss: {boss_name}({boss_title})")
-        print(f"  encryptJobId: {encrypt_job_id or '(未读到)'}")
+        log.info(f"  公司: {company}  Boss: {boss_name}({boss_title})")
+        log.info(f"  encryptJobId: {encrypt_job_id or '(未读到)'}")
 
         # 2. 时间检查
         session_time = (session_info or {}).get("time", "") or get_session_time(tab, chat_info)
         if is_session_too_old(session_time):
-            print(f"  → 最新消息 {session_time!r} 超过一周，跳过")
+            log.info(f"  → 最新消息 {session_time!r} 超过一周，跳过")
             return
-        print(f"  → 最新消息时间: {session_time!r}（一周内）")
+        log.info(f"  → 最新消息时间: {session_time!r}（一周内）")
 
         # 3. 查岗位表
         job_row    = get_job_by_encrypt_id(encrypt_job_id) if encrypt_job_id else None
         jobs_db_id = job_row["id"] if job_row else 0
         jd         = job_row["jd"] if job_row else ""
         if job_row:
-            print(f"  匹配到岗位 id={jobs_db_id}: {job_row['position']}")
+            log.info(f"  匹配到岗位 id={jobs_db_id}: {job_row['position']}")
         else:
-            print("  [岗位] 未匹配到 jobs 表，无 JD 上下文")
+            log.info("  [岗位] 未匹配到 jobs 表，无 JD 上下文")
 
         # 4. 一次性读取消息（此后不再调用 read_messages）
         messages = read_messages(tab)
-        print(f"  消息数量: {len(messages)}")
+        log.info(f"  消息数量: {len(messages)}")
         if not messages:
-            print("  [跳过] 聊天记录为空")
+            log.info("  [跳过] 聊天记录为空")
             return
 
         # 5. 分类与计算
@@ -185,7 +186,7 @@ def process_session(tab, session_info: dict | None = None):
         boss_texts = [m for m in messages if not m["isSelf"]  and not m["isSystem"] and not m["isCard"]]
         has_jd     = bool(job_row and jd.strip())
         initiator  = "boss" if (not my_texts and boss_texts) else "me"
-        print(f"  我方文字: {len(my_texts)} 条  Boss文字: {len(boss_texts)} 条")
+        log.info(f"  我方文字: {len(my_texts)} 条  Boss文字: {len(boss_texts)} 条")
 
         # last_is_boss：从末尾找第一条非系统、非卡片、有文字的消息，判断是否来自 boss
         _last_text_msg = next(
@@ -201,7 +202,7 @@ def process_session(tab, session_info: dict | None = None):
 
         if db_resume_sent:
             resume_already_sent = True
-            print("  → 数据库：简历已投递过")
+            log.info("  → 数据库：简历已投递过")
         elif not boss_texts:
             resume_already_sent = False
         elif not my_texts:
@@ -212,9 +213,9 @@ def process_session(tab, session_info: dict | None = None):
                 for m in messages
             )
             if resume_already_sent:
-                print("  → 系统消息：简历已发送过")
+                log.info("  → 系统消息：简历已发送过")
 
-        print(f"  简历状态: already_sent={resume_already_sent}")
+        log.info(f"  简历状态: already_sent={resume_already_sent}")
 
         # 7. 加载简历
         resume = load_resume()
@@ -224,7 +225,7 @@ def process_session(tab, session_info: dict | None = None):
             saved_id = save_job_from_chat(chat_info)
             if saved_id:
                 jobs_db_id = saved_id
-                print(f"  → 岗位已保存至 jobs 表 id={saved_id}（source=chat）")
+                log.info(f"  → 岗位已保存至 jobs 表 id={saved_id}（source=chat）")
 
         # ══════════════════════════════════════════════════════════════
         # 阶段二：写库（操作前状态，仅此一次）
@@ -254,9 +255,9 @@ def process_session(tab, session_info: dict | None = None):
                 resume_sent    = 1 if resume_already_sent else 0,
                 # tendency_score / ai_reasoning 不传，保留库中已有值
             )
-            print(f"  [DB] 已写入当前状态（resume_sent={1 if resume_already_sent else 0}）")
+            log.info(f"  [DB] 已写入当前状态（resume_sent={1 if resume_already_sent else 0}）")
         else:
-            print("  [DB] 无 encryptJobId，跳过写库")
+            log.info("  [DB] 无 encryptJobId，跳过写库")
 
         # ══════════════════════════════════════════════════════════════
         # 阶段三：执行操作（委托给 session_actions）
@@ -276,5 +277,4 @@ def process_session(tab, session_info: dict | None = None):
         )
 
     except Exception as e:
-        print(f"  [错误] 会话 {label} 处理异常，已跳过: {e}")
-        import traceback; traceback.print_exc()
+        log.exception(f"  [错误] 会话 {label} 处理异常，已跳过: {e}")
