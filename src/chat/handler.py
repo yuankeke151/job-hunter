@@ -30,7 +30,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import CDP_CHAT_URL, POLL_LIMIT, CONTINUOUS_POLL
-from shared.cdp_utils import cdp_click, random_delay, evaluate, small_human_scroll, is_browser_alive
+from shared.cdp_utils import (cdp_click, random_delay, evaluate, small_human_scroll,
+                              is_browser_alive, silence_pychrome_recv_loop_noise)
 from shared.database import init_chat_db
 from shared.logger import log
 from chat.session_processor import process_session, is_session_too_old
@@ -103,6 +104,8 @@ def connect_tab() -> tuple:
 
 
 def main():
+    silence_pychrome_recv_loop_noise()
+
     log.info("=" * 60)
     log.info("  chat_handler.py — BOSS直聘 IM 自动化处理")
     log.info(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")

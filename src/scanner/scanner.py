@@ -121,6 +121,30 @@ _JS_PANEL_COMPANY = """
 })()
 """
 
+# ── JS：从右侧 JD 面板读取招聘者姓名/title（与 chat 侧「查看职位」详情页同款逻辑）──
+_JS_PANEL_RECRUITER = """
+(function() {
+    const boss = document.querySelector('.job-boss-info');
+    if (!boss) return JSON.stringify({ recruiterName: '', recruiterTitle: '' });
+
+    let recruiterName = '', recruiterTitle = '';
+    const nameEl = boss.querySelector('h2.name');
+    if (nameEl) {
+        for (const node of nameEl.childNodes) {
+            if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+                recruiterName = node.textContent.trim();
+                break;
+            }
+        }
+    }
+    const attrText = (boss.querySelector('.boss-info-attr')?.innerText || '').trim();
+    const parts = attrText.split('\\u00b7').map(s => s.trim()).filter(Boolean);
+    if (parts.length >= 2) recruiterTitle = parts[1];
+
+    return JSON.stringify({ recruiterName, recruiterTitle });
+})()
+"""
+
 # ── JS：获取「立即沟通」按钮坐标 ─────────────────────────────────────────────
 _JS_CHAT_BTN_RECT = """
 (function() {
@@ -294,6 +318,12 @@ def scan_page():
 
                     jd   = evaluate(tab, _JS_READ_JD)   or ""
                     city = evaluate(tab, _JS_READ_CITY) or ""
+
+                    recruiter_raw   = evaluate(tab, _JS_PANEL_RECRUITER)
+                    recruiter       = json.loads(recruiter_raw) if recruiter_raw else {}
+                    recruiter_name  = recruiter.get("recruiterName", "")
+                    recruiter_title = recruiter.get("recruiterTitle", "")
+
                     if jd:
                         preview = jd[:120].replace("\n", " ")
                         log.info(f"      JD({len(jd)}字): {preview}...")
@@ -320,6 +350,8 @@ def scan_page():
                                     salary       = salary,
                                     salary_ok    = 1 if salary_ok else 0,
                                     city         = city,
+                                    recruiter_name  = recruiter_name,
+                                    recruiter_title = recruiter_title,
                                 )
                                 log.info(f"      [DB] 已保存 (id={rowid}, 非目标城市)")
                         divider()
@@ -435,6 +467,8 @@ def scan_page():
                             salary         = salary,
                             salary_ok      = 1 if salary_ok else 0,
                             city           = city,
+                            recruiter_name  = recruiter_name,
+                            recruiter_title = recruiter_title,
                             analyzed       = analyzed_val,
                             score          = analysis.get("match_score", 0),
                             should_apply   = 1 if analysis.get("should_apply") else 0,

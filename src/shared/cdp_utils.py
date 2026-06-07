@@ -1,6 +1,7 @@
 import time
 import random
 import json
+import threading
 import requests
 from shared.logger import log
 
@@ -34,6 +35,28 @@ def cdp_wheel(tab, x: float, y: float, delta_y: int):
         deltaX=0, deltaY=delta_y,
         modifiers=0,
     )
+
+
+def silence_pychrome_recv_loop_noise():
+    """
+    过滤 pychrome._recv_loop 的已知后台线程噪音：关闭标签页时 websocket-client
+    在连接关闭时返回空字符串而非抛出 WebSocketException，pychrome 未捕获该情况，
+    导致 json.loads('') 抛出 JSONDecodeError 冲出 _recv_loop 线程（不影响主流程）。
+    只吞掉这一种特定异常，其他后台线程异常仍交给默认钩子打印。
+    """
+    default_hook = threading.excepthook
+
+    def _hook(args):
+        tb = args.exc_traceback
+        while tb is not None:
+            if tb.tb_frame.f_code.co_name == "_recv_loop":
+                if args.exc_type is json.JSONDecodeError:
+                    return
+                break
+            tb = tb.tb_next
+        default_hook(args)
+
+    threading.excepthook = _hook
 
 
 def is_browser_alive(cdp_url: str) -> bool:

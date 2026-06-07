@@ -6,10 +6,10 @@ import pdfplumber
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import (DB_PATH, RESUME_PATH, CHAT_MAX_AGE_DAYS)
 from shared.cdp_utils import evaluate, read_messages
-from shared.database import (get_chat, upsert_chat, save_job_from_chat,
+from shared.database import (get_chat, upsert_chat, save_job_from_view_detail,
                               get_job_by_encrypt_id)
 from shared.logger import log
-from chat.session_actions import execute_session_actions
+from chat.session_actions import execute_session_actions, fetch_job_detail_via_view_job
 
 # ── 简历缓存 ──────────────────────────────────────────────────────────────────
 
@@ -164,6 +164,13 @@ def process_session(tab, session_info: dict | None = None):
         log.info(f"  encryptJobId: {encrypt_job_id or '(未读到)'}")
         log.info(f"  薪资: {salary_desc or '(未读到)'}")
 
+        # encryptJobId 正常情况下必定能读到；读不到说明页面结构异常或选择器失效，
+        # 后续 JD 获取/匹配/写库全部依赖该字段，继续运行没有意义，直接终止程序排查
+        if not encrypt_job_id:
+            log.error(f"  [致命错误] 未读到 encryptJobId（会话：{label}），"
+                      f"该字段正常情况下必定存在，可能是页面结构变化导致选择器失效，程序退出")
+            sys.exit(1)
+
         # 2. 时间检查
         session_time = (session_info or {}).get("time", "") or get_session_time(tab, chat_info)
         if is_session_too_old(session_time):
@@ -190,7 +197,6 @@ def process_session(tab, session_info: dict | None = None):
         # 5. 分类与计算
         my_texts   = [m for m in messages if     m["isSelf"]  and not m["isCard"]]
         boss_texts = [m for m in messages if not m["isSelf"]  and not m["isSystem"] and not m["isCard"]]
-        has_jd     = bool(job_row and jd.strip())
         initiator  = "boss" if (not my_texts and boss_texts) else "me"
         log.info(f"  我方文字: {len(my_texts)} 条  Boss文字: {len(boss_texts)} 条")
 
@@ -209,10 +215,6 @@ def process_session(tab, session_info: dict | None = None):
         if db_resume_sent:
             resume_already_sent = True
             log.info("  → 数据库：简历已投递过")
-        elif not boss_texts:
-            resume_already_sent = False
-        elif not my_texts:
-            resume_already_sent = False
         else:
             resume_already_sent = any(
                 m.get("isSystem") and "简历" in m.get("text", "")
@@ -226,12 +228,17 @@ def process_session(tab, session_info: dict | None = None):
         # 7. 加载简历
         resume = load_resume()
 
-        # 8. 无JD 时补录岗位
-        if not has_jd and not job_row:
-            saved_id = save_job_from_chat(chat_info)
-            if saved_id:
-                jobs_db_id = saved_id
-                log.info(f"  → 岗位已保存至 jobs 表 id={saved_id}（source=chat）")
+        # 8. 未匹配到岗位记录时，通过「查看职位」打开详情页补录完整岗位信息
+        #    （encrypt_job_id 已在上方保证非空，该耗时操作通过 not job_row 确保每个岗位只触发一次）
+        if not job_row:
+            detail = fetch_job_detail_via_view_job(tab)
+            if detail and detail.get("jd"):
+                saved_id = save_job_from_view_detail(encrypt_job_id, detail)
+                if saved_id:
+                    jobs_db_id = saved_id
+                    jd         = detail["jd"]
+                    log.info(f"  → 通过「查看职位」补录岗位 id={saved_id}"
+                             f"（source=chat, JD {len(jd)} 字）")
 
         # ══════════════════════════════════════════════════════════════
         # 阶段二：写库（操作前状态，仅此一次）
@@ -274,7 +281,6 @@ def process_session(tab, session_info: dict | None = None):
 
         execute_session_actions(
             tab                 = tab,
-            has_jd              = has_jd,
             my_texts            = my_texts,
             boss_texts          = boss_texts,
             last_is_boss        = last_is_boss,

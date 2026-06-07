@@ -37,6 +37,8 @@ def init_db():
                 salary        TEXT    DEFAULT '',  -- 解码后的薪资描述（解码失败时存原始乱码）
                 salary_ok     INTEGER DEFAULT 0,   -- 薪资解码是否完全成功：0=失败/未知 1=成功
                 city          TEXT    DEFAULT '',
+                recruiter_name  TEXT  DEFAULT '',  -- 招聘者姓名（来自聊天页「查看职位」详情）
+                recruiter_title TEXT  DEFAULT '',  -- 招聘者 title（如"招聘者"）
                 analyzed      INTEGER DEFAULT 0,  -- 0=未解析 1=本次API解析 2=跳过(他端已沟通)
                 score         INTEGER DEFAULT 0,
                 should_apply  INTEGER DEFAULT 0,
@@ -58,6 +60,9 @@ def init_db():
             ("salary",         "TEXT    DEFAULT ''"),
             ("salary_ok",      "INTEGER DEFAULT 0"),
             ("city",           "TEXT    DEFAULT ''"),
+            ("recruiter_name",  "TEXT    DEFAULT ''"),
+            ("recruiter_title", "TEXT    DEFAULT ''"),
+            ("source",         "TEXT    DEFAULT 'scanner'"),
             ("analyzed",       "INTEGER DEFAULT 0"),
             ("score",          "INTEGER DEFAULT 0"),
             ("should_apply",   "INTEGER DEFAULT 0"),
@@ -93,6 +98,8 @@ def save_job(
     salary: str = "",
     salary_ok: int = 0,
     city: str = "",
+    recruiter_name: str = "",
+    recruiter_title: str = "",
     analyzed: int = 0,
     score: int = 0,
     should_apply: int = 0,
@@ -101,6 +108,7 @@ def save_job(
     skip_reason: str = "",
     greeted: int = 0,
     resume_file: str = "",
+    source: str = "scanner",
 ) -> int:
     """插入一条新岗位记录，返回 rowid。"""
     with _conn() as c:
@@ -108,19 +116,19 @@ def save_job(
             """
             INSERT INTO jobs
                 (job_id, company, position, jd, experience, education, company_size,
-                 salary, salary_ok, city,
+                 salary, salary_ok, city, recruiter_name, recruiter_title,
                  analyzed, score, should_apply, key_matches, missing_skills, skip_reason,
-                 greeted, resume_file)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 greeted, resume_file, source)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 job_id, company.strip(), position.strip(), jd.strip(),
                 experience, education, company_size,
-                salary, salary_ok, city,
+                salary, salary_ok, city, recruiter_name, recruiter_title,
                 analyzed, score, should_apply,
                 json.dumps(key_matches or [], ensure_ascii=False),
                 json.dumps(missing_skills or [], ensure_ascii=False),
-                skip_reason, greeted, resume_file,
+                skip_reason, greeted, resume_file, source,
             ),
         )
         c.commit()
@@ -238,30 +246,36 @@ def upsert_chat(
         c.commit()
 
 
-def save_job_from_chat(chat_info: dict) -> int:
+def save_job_from_view_detail(encrypt_job_id: str, detail: dict) -> int:
     """
-    将 IM 会话里读到的少量岗位信息写入 jobs 表（source='chat'）。
+    将聊天页「查看职位」打开的详情页中读到的完整岗位信息写入 jobs 表（source='chat'）。
+    与旧版 save_job_from_chat 不同，这里能拿到完整 JD，不再写入残缺占位记录。
     若 job_id 已存在则直接返回已有 id，不重复写入。
     返回 jobs.id（失败时返回 0）。
     """
-    job_id   = chat_info.get("encryptJobId", "")
-    company  = chat_info.get("companyName",  "")
-    position = chat_info.get("jobName",      "") or "(IM会话，职位未知)"
-    city     = chat_info.get("locationName", "")
-    if not job_id or not company:
+    company  = detail.get("companyName", "")
+    position = detail.get("jobName",     "") or "(IM会话，职位未知)"
+    jd       = detail.get("jd",          "")
+    if not encrypt_job_id or not company or not jd:
         return 0
     with _conn() as c:
-        row = c.execute("SELECT id FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+        row = c.execute("SELECT id FROM jobs WHERE job_id=?", (encrypt_job_id,)).fetchone()
         if row:
             return row[0]
-        cur = c.execute(
-            """INSERT OR IGNORE INTO jobs
-               (job_id, company, position, jd, city, source, greeted)
-               VALUES (?,?,?,?,?,?,?)""",
-            (job_id, company, position, "", city, "chat", 2),
-        )
-        c.commit()
-        return cur.lastrowid or 0
+    salary = detail.get("salary", "")
+    return save_job(
+        job_id          = encrypt_job_id,
+        company         = company,
+        position        = position,
+        jd              = jd,
+        city            = detail.get("city", ""),
+        salary          = salary,
+        salary_ok       = 1 if salary else 0,
+        recruiter_name  = detail.get("recruiterName",  ""),
+        recruiter_title = detail.get("recruiterTitle", ""),
+        greeted         = 2,
+        source          = "chat",
+    )
 
 
 def get_job_by_encrypt_id(encrypt_job_id: str) -> dict | None:

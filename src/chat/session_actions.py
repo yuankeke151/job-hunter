@@ -1,11 +1,12 @@
 import sys, json, re, time, random
 from pathlib import Path
 from openai import OpenAI
+import pychrome
+import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import (API_KEY, API_BASE_URL, AI_MODEL,
-                    FIXED_SELF_INTRO, FIXED_FOLLOWUP, DISCLAIMER,
-                    REPLY_ENABLED, SEND_ENABLED)
+from config import (API_KEY, API_BASE_URL, AI_MODEL, CDP_CHAT_URL,
+                    DISCLAIMER, REPLY_ENABLED, SEND_ENABLED)
 from shared.cdp_utils import evaluate, cdp_click, random_delay, read_messages
 from shared.logger import log
 
@@ -17,15 +18,6 @@ SEND_SEL  = "button.btn-send"
 _ai_client: OpenAI | None = None
 
 # ── AI Prompt ─────────────────────────────────────────────────────────────────
-
-_SYS_SELF_PROMO = """\
-你是专业求职助手。用户已主动向该HR发起沟通，但HR尚未回复。
-根据职位JD和用户简历，生成一段自我推荐文字：
-- 100-200字，语气自然专业，以第一人称书写
-- 突出与岗位最相关的 2-3 个经历或技能
-- 结尾可以表达期待进一步沟通
-只输出消息文字，不含任何其他内容。\
-"""
 
 _SYS_PROMPT = """\
 你是专业求职助手，帮助用户与招聘HR进行自然、专业的中文沟通。
@@ -40,30 +32,6 @@ _SYS_PROMPT = """\
    - 80-100：非常感兴趣/积极推进
 2. 若 need_self_promo=true：生成简历投递后的自我推荐，100-150字，自然专业，
    突出与岗位最相关的 2-3 个经历或技能，结尾表达期待沟通
-3. 若 need_reply=true：针对HR最新消息生成回复，50-150字，语气自然
-
-只输出合法JSON，不含任何markdown或额外文字：
-{"self_promo": "...", "reply": "...", "tendency_score": 75, "reasoning": "一句话说明评分依据"}
-
-不需要的字段填空字符串 ""。\
-"""
-
-# 无JD 时使用：去掉 JD 分析要求，避免模型因上下文为空而返回自然语言
-_SYS_PROMPT_NO_JD = """\
-你是专业求职助手，帮助用户与招聘HR进行自然、专业的中文沟通。
-
-当前情况：未能获取完整职位JD，仅有公司名称、薪资范围（如有）、用户简历和聊天记录可供参考。
-
-根据以上信息，完成以下任务：
-0. 若提供了薪资范围，可作为评估职位匹配度和生成回复内容的参考依据
-   （如薪资明显契合或聊天中提到薪资话题时自然回应，无需主动炫耀或纠结数字）
-1. 评估HR倾向性分数（0-100）：
-   - 0-30  ：不感兴趣/敷衍
-   - 30-60 ：例行流程/一般
-   - 60-80 ：较感兴趣/主动跟进
-   - 80-100：非常感兴趣/积极推进
-2. 若 need_self_promo=true：生成简历投递后的自我推荐，100-150字，自然专业，
-   突出简历中最有竞争力的 2-3 个经历或技能，结尾表达期待进一步了解岗位详情
 3. 若 need_reply=true：针对HR最新消息生成回复，50-150字，语气自然
 
 只输出合法JSON，不含任何markdown或额外文字：
@@ -94,31 +62,6 @@ def _fmt_history(messages: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def call_ai_self_promo(boss_info: dict, jd: str, resume: str) -> str:
-    salary_desc = boss_info.get("salaryDesc", "")
-    salary_line = f"薪资范围：{salary_desc}\n" if salary_desc else ""
-    user_content = (
-        f"【职位JD】\n公司：{boss_info.get('companyName','')}\n{salary_line}{jd[:2500]}\n\n"
-        f"【我的简历】\n{resume[:2500]}"
-    )
-    try:
-        resp = _get_client().chat.completions.create(
-            model=AI_MODEL,
-            messages=[
-                {"role": "system", "content": _SYS_SELF_PROMO},
-                {"role": "user",   "content": user_content},
-            ],
-            max_tokens=400,
-        )
-        result = (resp.choices[0].message.content or "").strip()
-        if not result:
-            log.warning("  [AI] 自我推荐响应为空")
-        return result
-    except Exception as e:
-        log.error(f"  [AI] 自我推荐生成失败: {e}")
-        return ""
-
-
 def call_ai(
     boss_info: dict,
     jd: str,
@@ -127,19 +70,10 @@ def call_ai(
     need_reply: bool,
     need_self_promo: bool = False,
 ) -> dict:
-    """调用 AI，返回 {self_promo, reply, tendency_score, reasoning}。
-    jd 为空时自动切换到无JD专用 prompt。
-    """
-    has_jd_ctx = bool(jd and jd.strip())
-    sys_prompt = _SYS_PROMPT if has_jd_ctx else _SYS_PROMPT_NO_JD
-
+    """调用 AI，返回 {self_promo, reply, tendency_score, reasoning}。"""
     salary_desc = boss_info.get("salaryDesc", "")
     salary_line = f"薪资范围：{salary_desc}\n" if salary_desc else ""
-
-    if has_jd_ctx:
-        jd_section = f"【职位JD】\n公司：{boss_info.get('companyName','')}\n{salary_line}{jd[:2500]}\n\n"
-    else:
-        jd_section = f"【说明】无完整JD，仅供参考\n公司：{boss_info.get('companyName','')}\n{salary_line}\n"
+    jd_section  = f"【职位JD】\n公司：{boss_info.get('companyName','')}\n{salary_line}{jd[:2500]}\n\n"
 
     user_content = (
         f"need_self_promo: {'true' if need_self_promo else 'false'}\n"
@@ -153,7 +87,7 @@ def call_ai(
         resp = _get_client().chat.completions.create(
             model=AI_MODEL,
             messages=[
-                {"role": "system", "content": sys_prompt},
+                {"role": "system", "content": _SYS_PROMPT},
                 {"role": "user",   "content": user_content},
             ],
             max_tokens=800,
@@ -460,65 +394,159 @@ def _read_agree_cards(tab) -> list[dict]:
 
 def handle_interactive_cards(tab) -> bool:
     """
-    处理当前聊天中所有可点击「同意」的交互卡片。
+    处理当前聊天中所有可点击「同意」的非简历交互卡片（微信交换、沟通意向等）。
 
-    流程（x = 可点击同意卡片总数）：
-      - 若含简历请求卡（cardType='resume'）：
-          先循环点击其余 x-1 张（每轮重新读取坐标，跳过 resume）
-          再重新读取简历卡坐标，点击「同意」并处理弹窗
-      - 若不含简历请求卡：
-          循环点击全部 x 张（每轮重新读取坐标）
-      非简历卡点击后等待 1.5-2.5s（系统可能自动插入消息，坐标会变化）。
+    流程：
+      - 直接循环：每轮重新读取可点击同意卡片，按顺序找第一张非简历卡
+          找到 → 点击「同意」，等待 1.5-2.5s（系统可能自动插入消息，坐标会变化），继续下一轮
+          找不到（全是简历卡或无卡片）→ 结束循环
+      简历请求卡始终跳过，不在此处处理。
 
-    返回 True = 简历弹窗已确认发送；False = 未处理简历卡（含调试模式）。
+    返回值固定为 False。
     """
-    cards = _read_agree_cards(tab)
-    x = len(cards)
-    if x == 0:
-        return False
-
-    has_resume = any(c["cardType"] == "resume" for c in cards)
-    log.info(f"  [卡片交互] 共 {x} 张可点击同意卡片  含简历卡: {has_resume}")
-    for c in cards:
-        label = _CARD_TYPE_LABEL.get(c["cardType"], f"未知({c['cardType']})")
-        log.info(f"    {label}  center=({c['x']},{c['y']})")
-
-    # ── 循环点击非简历卡片 ────────────────────────────────────────────────────
-    click_count = x - 1 if has_resume else x
-    for i in range(click_count):
-        # 每轮重新读取，跳过 resume 类型，取第一个
-        fresh = [c for c in _read_agree_cards(tab) if c["cardType"] != "resume"]
-        if not fresh:
-            log.info(f"  [卡片交互] 第 {i+1} 轮：非简历卡片已全部处理，提前结束")
+    while True:
+        cards  = _read_agree_cards(tab)
+        target = next((c for c in cards if c["cardType"] != "resume"), None)
+        if target is None:
             break
-        card  = fresh[0]
-        label = _CARD_TYPE_LABEL.get(card["cardType"], f"未知({card['cardType']})")
-        log.info(f"  [卡片交互] 点击第 {i+1}/{click_count} 张「{label}」"
-                 f"  center=({card['x']},{card['y']})")
-        cdp_click(tab, card["x"], card["y"])
+        label = _CARD_TYPE_LABEL.get(target["cardType"], f"未知({target['cardType']})")
+        log.info(f"  [卡片交互] 点击「{label}」  center=({target['x']},{target['y']})")
+        cdp_click(tab, target["x"], target["y"])
         random_delay(1.5, 2.5)
 
-    if not has_resume:
-        return False
+    return False
 
-    # ── 重新读取简历卡坐标，点击「同意」并处理弹窗 ───────────────────────────
-    resume_cards = [c for c in _read_agree_cards(tab) if c["cardType"] == "resume"]
-    if not resume_cards:
-        log.info("  [卡片交互] 重新读取：简历请求卡片已消失或已处理")
-        return False
 
-    card = resume_cards[0]
-    log.info(f"  [卡片交互] 点击简历请求「同意」  center=({card['x']},{card['y']})")
-    cdp_click(tab, card["x"], card["y"])
-    random_delay(1.0, 1.5)
-    return handle_resume_dialog(tab)
+# ── 「查看职位」详情页抓取 ────────────────────────────────────────────────────
+
+_JS_FIND_VIEW_JOB_BTN = """
+(function() {
+    const spans = Array.from(document.querySelectorAll('.position-content .right-content span'));
+    const el = spans.find(s => (s.innerText || '').includes('查看职位'));
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return JSON.stringify({
+        x: r.left + r.width / 2,
+        y: r.top + r.height / 2,
+        visible: r.width > 0 && r.height > 0,
+    });
+})()
+"""
+
+_JS_EXTRACT_JOB_DETAIL = """
+(function() {
+    const txt = (s) => { const e = document.querySelector(s); return e ? (e.innerText || '').trim() : ''; };
+
+    const jobName = txt('.job-name') || txt('.job-banner .name h1');
+    const salary  = txt('.job-banner .name .salary') || txt('.salary');
+    const city    = txt('.job-banner .text-desc.text-city') || txt('.text-city');
+    const jd      = txt('.job-sec-text');
+
+    let companyName = '', recruiterName = '', recruiterTitle = '';
+    const boss = document.querySelector('.job-boss-info');
+    if (boss) {
+        const nameEl = boss.querySelector('h2.name');
+        if (nameEl) {
+            for (const node of nameEl.childNodes) {
+                if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+                    recruiterName = node.textContent.trim();
+                    break;
+                }
+            }
+        }
+        const attrText = (boss.querySelector('.boss-info-attr')?.innerText || '').trim();
+        const parts = attrText.split('\\u00b7').map(s => s.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+            companyName    = parts[0];
+            recruiterTitle = parts[1];
+        } else if (parts.length === 1) {
+            companyName = parts[0];
+        }
+    }
+
+    return JSON.stringify({jobName, city, salary, companyName, jd, recruiterName, recruiterTitle});
+})()
+"""
+
+
+def fetch_job_detail_via_view_job(tab) -> dict | None:
+    """
+    点击聊天页右侧职位面板的「查看职位」，在新打开的 job_detail 标签页中
+    提取完整岗位信息（岗位名称/地点/薪资/公司名称/JD/招聘者姓名/招聘者title），
+    随后关闭该标签页并切回聊天页。
+
+    该页面薪资为明文（与扫描页 .job-salary 的 kanzhun-mix 混淆不同），无需解码。
+    任何步骤失败均返回 None，并尽量保证标签页已清理、焦点已切回聊天页。
+    """
+    raw = evaluate(tab, _JS_FIND_VIEW_JOB_BTN)
+    if not raw or raw == "null":
+        log.info("  [查看职位] 未找到「查看职位」按钮，跳过")
+        return None
+    btn = json.loads(raw)
+    if not btn["visible"]:
+        log.info("  [查看职位] 按钮不可见，跳过")
+        return None
+
+    browser = pychrome.Browser(url=CDP_CHAT_URL)
+    before_ids = {t["id"] for t in requests.get(f"{CDP_CHAT_URL}/json", timeout=5).json()}
+
+    cdp_click(tab, btn["x"], btn["y"])
+    log.info("  [查看职位] 已点击，等待详情页打开...")
+
+    detail_meta = None
+    deadline = time.time() + 8.0
+    while time.time() < deadline:
+        for t in requests.get(f"{CDP_CHAT_URL}/json", timeout=5).json():
+            if (t["id"] not in before_ids
+                    and t.get("type") == "page"
+                    and "/job_detail/" in t.get("url", "")):
+                detail_meta = t
+                break
+        if detail_meta:
+            break
+        time.sleep(0.5)
+
+    if not detail_meta:
+        log.info("  [查看职位] 超时未检测到详情页，跳过")
+        return None
+
+    detail_tab = next((t for t in browser.list_tab() if t.id == detail_meta["id"]), None)
+    if detail_tab is None:
+        log.info("  [查看职位] 未能连接详情页标签，跳过")
+        return None
+
+    detail_tab.start()
+    try:
+        for _ in range(10):
+            if evaluate(detail_tab, "!!document.querySelector('.job-name')"):
+                break
+            time.sleep(0.5)
+        raw_detail = evaluate(detail_tab, _JS_EXTRACT_JOB_DETAIL)
+    finally:
+        detail_tab.stop()
+        try:
+            browser.close_tab(detail_meta["id"])
+        except Exception as e:
+            log.warning(f"  [查看职位] 关闭详情页标签失败: {e}")
+        try:
+            browser.activate_tab(tab)
+        except Exception as e:
+            log.warning(f"  [查看职位] 切回聊天页标签失败: {e}")
+
+    if not raw_detail:
+        log.info("  [查看职位] 详情页提取失败")
+        return None
+
+    detail = json.loads(raw_detail)
+    log.info(f"  [查看职位] 已获取详情：{detail.get('jobName','')} "
+             f"@ {detail.get('companyName','')}（JD {len(detail.get('jd',''))} 字）")
+    return detail
 
 
 # ── 会话操作主入口 ────────────────────────────────────────────────────────────
 
 def execute_session_actions(
     tab,
-    has_jd: bool,
     my_texts: list[dict],
     boss_texts: list[dict],
     last_is_boss: bool,
@@ -529,13 +557,12 @@ def execute_session_actions(
     messages: list[dict],
 ):
     """
-    执行会话操作阶段（无JD-C / 无JD-A / 无JD-B / 模式A / 模式B）。
+    执行会话操作阶段（场景C / 场景A / 场景B，统一基于「有JD」上下文）。
     各分支内不调用 upsert_chat / read_messages。
 
-    Step 1（无条件）：handle_interactive_cards 处理所有可点击「同意」卡片。
-      - 微信/沟通意向等非简历卡：依次点击，每次重新读取坐标
-      - 简历请求卡：最后点击「同意」并处理弹窗
-    Step 2：根据 has_jd / my_texts / boss_texts 进入对应分支，完成 AI 和发消息。
+    Step 1（无条件）：handle_interactive_cards 依次点击微信/沟通意向等非简历卡片
+      的「同意」（每次重新读取坐标），简历请求卡始终跳过、不在此处处理。
+    Step 2：根据 my_texts / boss_texts 进入对应分支，完成 AI 和发消息（含简历操作）。
     """
     company = chat_info.get("companyName", "")
 
@@ -572,90 +599,47 @@ def execute_session_actions(
             log.info("  → 发送按钮不可用，消息留在输入框")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Step 1：处理所有可点击「同意」的交互卡片（无条件，优先于所有分支）
+    # Step 1：处理除简历卡片外所有可点击「同意」的交互卡片（无条件，优先于所有分支）
     # ══════════════════════════════════════════════════════════════════════════
-    resume_sent_now = 1 if handle_interactive_cards(tab) else 0
+    handle_interactive_cards(tab)
+    resume_sent_now = 0
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Step 2：按 has_jd / my_texts / boss_texts 分支处理 AI 和发消息
+    # Step 2：按 my_texts / boss_texts 分支处理 AI 和发消息（统一在「有JD」前提下）
     # ══════════════════════════════════════════════════════════════════════════
 
-    if not has_jd:
-        label_nojd = "未在 jobs 表" if not chat_info.get("encryptJobId") else "JD 为空"
-        log.info(f"  [无JD] {label_nojd}")
-
-        if not my_texts:
-            # 无JD-C: boss 主动发起，我方无消息
-            log.info("  [无JD-C] Boss 主动发起，我方无消息 → 发简历 + 固定自我介绍")
-            if not resume_sent_now:
-                ok = execute_resume_action(tab)
-                if ok:
-                    resume_sent_now = 1
-                    random_delay(1.0, 2.0)
-            _type_and_log(tab, FIXED_SELF_INTRO, company[:10])
-
-        elif not boss_texts:
-            # 无JD-A: 我主动发起，boss 未回复
-            log.info("  [无JD-A] 我方主动发起，Boss 未回复 → 固定跟进话术")
-            _type_and_log(tab, FIXED_FOLLOWUP, company[:10])
-
-        else:
-            # 无JD-B: 双方均有消息
-            log.info("  [无JD-B] 双方均有消息")
-            if resume_already_sent or resume_sent_now:
-                log.info("  → 简历已投递过，跳过简历环节")
-            else:
-                ok = execute_resume_action(tab)
-                if ok:
-                    resume_sent_now = 1
-                    random_delay(1.0, 2.0)
-
-            need_self_promo = resume_sent_now == 1
-            need_reply      = last_is_boss
-            log.info(f"  需要自我推荐: {'是' if need_self_promo else '否'}")
-            log.info(f"  需要回复:     {'是' if need_reply else '否'}"
-                     f"{'（最后发言是我）' if _last_text_msg and _last_text_msg['isSelf'] else ''}")
-            if need_reply and _last_text_msg:
-                log.info(f"  最新Boss消息: {_last_text_msg['text'][:50]!r}")
-
-            if not REPLY_ENABLED:
-                log.info("  [AI] REPLY_ENABLED=False，跳过 API 调用和消息发送")
-            elif not need_self_promo and not need_reply:
-                log.info("  [AI] 无需自我推荐也无需回复，跳过 API 调用")
-            else:
-                log.info("  [AI] 分析中（无JD）...")
-                ai_result = call_ai(
-                    chat_info, "", resume, messages,
-                    need_reply=need_reply,
-                    need_self_promo=need_self_promo,
-                )
-                log.info(f"  [AI] 倾向分: {ai_result['tendency_score']}/100"
-                         f"  {ai_result['reasoning']}")
-                if need_self_promo and ai_result.get("self_promo"):
-                    _type_and_log(tab, ai_result["self_promo"], company[:10])
-                    if need_reply and ai_result.get("reply"):
-                        random_delay(2.0, 3.0)
-                if need_reply and ai_result.get("reply"):
-                    _type_and_log(tab, ai_result["reply"], company[:10])
-
-    elif not boss_texts:
-        # 模式A（有JD）: 仅我方有消息，Boss 尚未回复
-        log.info("  [模式A] 有JD，Boss 尚未回复 → API 自我推荐")
+    def _send_self_promo(action_label: str):
         if not REPLY_ENABLED:
             log.info("  [AI] REPLY_ENABLED=False，跳过 API 调用和消息发送")
+            return
+        log.info(f"  [AI] 生成{action_label}中...")
+        ai_result = call_ai(chat_info, jd, resume, messages, need_reply=False, need_self_promo=True)
+        log.info(f"  [AI] 倾向分: {ai_result['tendency_score']}/100  {ai_result['reasoning']}")
+        promo = ai_result.get("self_promo", "")
+        if promo:
+            log.info(f"  [AI] 生成成功（{len(promo)} 字）")
+            _type_and_log(tab, promo, company[:10])
         else:
-            log.info("  [AI] 生成自我推荐中...")
-            promo = call_ai_self_promo(chat_info, jd, resume)
-            if promo:
-                log.info(f"  [AI] 生成成功（{len(promo)} 字）")
-                _type_and_log(tab, promo, company[:10])
-            else:
-                log.info("  [AI] 生成结果为空，跳过")
+            log.info("  [AI] 生成结果为空，跳过")
+
+    if not my_texts:
+        # 场景C: Boss 主动发起，我方无消息 → 发简历 + AI 自我介绍
+        log.info("  [场景C] Boss 主动发起，我方无消息 → 发简历 + AI 自我介绍")
+        ok = execute_resume_action(tab)
+        if ok:
+            resume_sent_now = 1
+            random_delay(1.0, 2.0)
+        _send_self_promo("自我介绍")
+
+    elif not boss_texts:
+        # 场景A: 我方主动发起，Boss 尚未回复 → AI 自我推荐
+        log.info("  [场景A] 我方主动发起，Boss 尚未回复 → AI 自我推荐")
+        _send_self_promo("自我推荐")
 
     else:
-        # 模式B（有JD）: 双方均有消息
-        log.info("  [模式B] 有JD，双方均有消息")
-        if resume_already_sent or resume_sent_now:
+        # 场景B: 双方均有消息
+        log.info("  [场景B] 双方均有消息")
+        if resume_already_sent:
             log.info("  → 简历已投递过，跳过简历环节")
         else:
             ok = execute_resume_action(tab)
