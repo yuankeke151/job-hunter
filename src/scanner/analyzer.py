@@ -47,6 +47,8 @@ def _load_resume() -> str:
 
 _SYSTEM_PROMPT = """\
 你是专业职业顾问，分析候选人简历与目标职位的匹配度。
+若提供了薪资范围，可作为匹配度评估的参考依据之一
+（如薪资明显低于候选人预期或行业水平，可在 skip_reason 中说明）。
 请只输出合法 JSON，格式如下（不含任何 markdown 或额外文字）：
 {
   "match_score": <0-100 整数>,
@@ -57,7 +59,7 @@ _SYSTEM_PROMPT = """\
 """
 
 
-def analyze_job(company: str, position: str, jd: str) -> dict:
+def analyze_job(company: str, position: str, jd: str, salary: str = "") -> dict:
     """
     分析简历与 JD 匹配度，返回：
     {
@@ -67,12 +69,17 @@ def analyze_job(company: str, position: str, jd: str) -> dict:
         "missing_skills": [...],
         "skip_reason": "..."
     }
+
+    salary: 解码成功时传入薪资描述（如 "25-50K·14薪"），作为匹配度参考一并发给 API；
+            解码失败或未提供时传空字符串，不出现在 prompt 中。
     """
-    resume   = _load_resume()
+    resume      = _load_resume()
+    salary_line = f"薪资范围：{salary}\n" if salary else ""
     user_msg = (
         f"候选人简历：\n{resume}\n\n"
         f"目标公司：{company}\n"
-        f"目标职位：{position}\n\n"
+        f"目标职位：{position}\n"
+        f"{salary_line}\n"
         f"职位描述：\n{jd[:3000]}"
     )
 

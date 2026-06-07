@@ -30,6 +30,8 @@ _JS_CHAT_INFO = """
             bothTalked   : !!c.bothTalked,
             jobName      : c.jobName       || '',
             salaryDesc   : c.salaryDesc    || '',
+            lowSalary    : c.lowSalary     || 0,
+            highSalary   : c.highSalary    || 0,
             locationName : c.locationName  || '',
         });
     } catch(e) { return null; }
@@ -155,8 +157,12 @@ def process_session(tab, session_info: dict | None = None):
         company        = chat_info.get("companyName", "") or (session_info or {}).get("company", "")
         boss_title     = chat_info.get("title",       "") or (session_info or {}).get("title",   "")
         boss_name      = chat_info.get("name",        "") or (session_info or {}).get("name",    "")
+        salary_desc    = chat_info.get("salaryDesc",  "")
+        salary_low     = chat_info.get("lowSalary",   0)
+        salary_high    = chat_info.get("highSalary",  0)
         log.info(f"  公司: {company}  Boss: {boss_name}({boss_title})")
         log.info(f"  encryptJobId: {encrypt_job_id or '(未读到)'}")
+        log.info(f"  薪资: {salary_desc or '(未读到)'}")
 
         # 2. 时间检查
         session_time = (session_info or {}).get("time", "") or get_session_time(tab, chat_info)
@@ -251,6 +257,9 @@ def process_session(tab, session_info: dict | None = None):
                 company        = company,
                 boss_title     = boss_title,
                 initiator      = initiator,
+                salary_desc    = salary_desc,
+                salary_low     = salary_low,
+                salary_high    = salary_high,
                 chat_history   = history_list,
                 resume_sent    = 1 if resume_already_sent else 0,
                 # tendency_score / ai_reasoning 不传，保留库中已有值

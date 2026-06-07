@@ -30,7 +30,9 @@ _SYS_SELF_PROMO = """\
 _SYS_PROMPT = """\
 你是专业求职助手，帮助用户与招聘HR进行自然、专业的中文沟通。
 
-根据职位JD、用户简历、完整聊天记录，完成以下任务：
+根据职位JD（含薪资范围，如有）、用户简历、完整聊天记录，完成以下任务：
+0. 若提供了薪资范围，可作为评估职位匹配度和生成回复内容的参考依据
+   （如薪资明显契合或聊天中提到薪资话题时自然回应，无需主动炫耀或纠结数字）
 1. 评估HR倾向性分数（0-100）：
    - 0-30  ：不感兴趣/敷衍
    - 30-60 ：例行流程/一般
@@ -50,9 +52,11 @@ _SYS_PROMPT = """\
 _SYS_PROMPT_NO_JD = """\
 你是专业求职助手，帮助用户与招聘HR进行自然、专业的中文沟通。
 
-当前情况：未能获取完整职位JD，仅有公司名称、用户简历和聊天记录可供参考。
+当前情况：未能获取完整职位JD，仅有公司名称、薪资范围（如有）、用户简历和聊天记录可供参考。
 
-根据用户简历和聊天记录，完成以下任务：
+根据以上信息，完成以下任务：
+0. 若提供了薪资范围，可作为评估职位匹配度和生成回复内容的参考依据
+   （如薪资明显契合或聊天中提到薪资话题时自然回应，无需主动炫耀或纠结数字）
 1. 评估HR倾向性分数（0-100）：
    - 0-30  ：不感兴趣/敷衍
    - 30-60 ：例行流程/一般
@@ -91,8 +95,10 @@ def _fmt_history(messages: list[dict]) -> str:
 
 
 def call_ai_self_promo(boss_info: dict, jd: str, resume: str) -> str:
+    salary_desc = boss_info.get("salaryDesc", "")
+    salary_line = f"薪资范围：{salary_desc}\n" if salary_desc else ""
     user_content = (
-        f"【职位JD】\n公司：{boss_info.get('companyName','')}\n{jd[:2500]}\n\n"
+        f"【职位JD】\n公司：{boss_info.get('companyName','')}\n{salary_line}{jd[:2500]}\n\n"
         f"【我的简历】\n{resume[:2500]}"
     )
     try:
@@ -127,10 +133,13 @@ def call_ai(
     has_jd_ctx = bool(jd and jd.strip())
     sys_prompt = _SYS_PROMPT if has_jd_ctx else _SYS_PROMPT_NO_JD
 
+    salary_desc = boss_info.get("salaryDesc", "")
+    salary_line = f"薪资范围：{salary_desc}\n" if salary_desc else ""
+
     if has_jd_ctx:
-        jd_section = f"【职位JD】\n公司：{boss_info.get('companyName','')}\n{jd[:2500]}\n\n"
+        jd_section = f"【职位JD】\n公司：{boss_info.get('companyName','')}\n{salary_line}{jd[:2500]}\n\n"
     else:
-        jd_section = f"【说明】无完整JD，仅供参考\n公司：{boss_info.get('companyName','')}\n\n"
+        jd_section = f"【说明】无完整JD，仅供参考\n公司：{boss_info.get('companyName','')}\n{salary_line}\n"
 
     user_content = (
         f"need_self_promo: {'true' if need_self_promo else 'false'}\n"

@@ -48,6 +48,7 @@ def small_human_scroll(tab, lo: int = 80, hi: int = 280):
     """点击前模拟人类浏览时的小幅随机滚动，随机方向。"""
     direction = random.choice([1, -1])
     delta     = random.randint(lo, hi)
+    log.info(f"  [抖动] {'↓' if direction > 0 else '↑'} {delta}px")
     tab.call_method(
         "Input.dispatchMouseEvent",
         type="mouseWheel",

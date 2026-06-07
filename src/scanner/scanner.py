@@ -15,7 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from scanner import analyzer
+from scanner import analyzer, salary_decoder
 from config import CDP_SCANNER_URL, SCAN_API_ENABLED, SCAN_GREET_ENABLED
 from shared.database import init_db, get_job_by_content, save_job
 from shared.cdp_utils import evaluate, cdp_click, cdp_wheel, random_delay, small_human_scroll, is_browser_alive
@@ -38,6 +38,7 @@ _JS_EXTRACT_CARDS = """
         const jobTags = Array.from(card.querySelectorAll('.tag-list li'))
                             .map(e => e.innerText.trim());
 
+        const salaryEl = card.querySelector('.job-salary');
         const compTags = Array.from(card.querySelectorAll(
             '.company-tag-list li, [class*="company-tag"] li, [class*="company-tag"] span'
         )).map(e => e.innerText.trim());
@@ -52,6 +53,7 @@ _JS_EXTRACT_CARDS = """
             company     : q('.boss-info .boss-name') || q('.boss-name'),
             experience  : jobTags[0] || '',
             education   : jobTags[1] || '',
+            salary_raw  : salaryEl ? (salaryEl.innerText || '').trim() : '',
             company_size: compTags.find(t => t.includes('人')) || compTags[1] || compTags[0] || '',
             job_id      : match ? match[1] : '',
         };
@@ -263,8 +265,12 @@ def scan_page():
                 experience   = card["experience"]   or "(无)"
                 company_size = card["company_size"] or "(无)"
 
+                salary, salary_ok = salary_decoder.decode(tab, card.get("salary_raw", ""))
+
                 log.info(f"[{idx+1:02d}] {name}  ·  {company}")
                 log.info(f"      经验: {experience}  规模: {company_size}")
+                if salary:
+                    log.info(f"      薪资: {salary}{'' if salary_ok else '（解码不完整）'}")
 
                 # ── 获取卡片坐标并用 CDP 鼠标事件点击 ────────────────────────
                 try:
@@ -311,6 +317,8 @@ def scan_page():
                                     experience   = card.get("experience", ""),
                                     education    = card.get("education", ""),
                                     company_size = card.get("company_size", ""),
+                                    salary       = salary,
+                                    salary_ok    = 1 if salary_ok else 0,
                                     city         = city,
                                 )
                                 log.info(f"      [DB] 已保存 (id={rowid}, 非目标城市)")
@@ -331,7 +339,10 @@ def scan_page():
                     score        = 0
                     if jd and SCAN_API_ENABLED:
                         log.info("      [分析] 调用 Claude API...")
-                        analysis     = analyzer.analyze_job(company, name, jd)
+                        analysis     = analyzer.analyze_job(
+                            company, name, jd,
+                            salary = salary if salary_ok else "",
+                        )
                         score        = analysis["match_score"]
                         should_apply = analysis["should_apply"]
                         key_matches  = analysis["key_matches"]
@@ -421,6 +432,8 @@ def scan_page():
                             experience     = card.get("experience", ""),
                             education      = card.get("education", ""),
                             company_size   = card.get("company_size", ""),
+                            salary         = salary,
+                            salary_ok      = 1 if salary_ok else 0,
                             city           = city,
                             analyzed       = analyzed_val,
                             score          = analysis.get("match_score", 0),

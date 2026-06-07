@@ -41,14 +41,14 @@ RESUME_PATH = RESUME_DIR  / "袁柯.pdf"
 LOG_PATH    = LOGS_DIR    / "app.log"
 
 # ── Scanner 行为开关 ──────────────────────────────────────────────────────────
-SCAN_API_ENABLED   = False  # True=调用 AI API 分析匹配度；False=跳过，score=0
-SCAN_GREET_ENABLED = False  # True=点击「立即沟通」并处理弹窗；False=只扫描不打招呼
+SCAN_API_ENABLED   = True  # True=调用 AI API 分析匹配度；False=跳过，score=0
+SCAN_GREET_ENABLED = True  # True=点击「立即沟通」并处理弹窗；False=只扫描不打招呼
 
 # ── 聊天模块运行参数 ──────────────────────────────────────────────────────────
-POLL_LIMIT        = 1    # 单轮最多处理会话数（调试=1，生产=50）
+POLL_LIMIT        = 20    # 单轮最多处理会话数（调试=1，生产=50）
 CHAT_MAX_AGE_DAYS = 100  # 超过此天数的会话跳过并重头轮询
 # True=持续轮询（生产模式）；False=处理完一轮后退出，且不点击左侧会话卡片
-CONTINUOUS_POLL   = False
+CONTINUOUS_POLL   = True
 # True=正常回复（发固定话术/API回复）；False=只做卡片同意和发简历，不产生新消息
 REPLY_ENABLED     = True
 # True=允许点击发送按钮；False=只打入输入框，不点击发送（REPLY_ENABLED=False时此开关无效）
