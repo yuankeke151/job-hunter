@@ -168,6 +168,8 @@ job-hunter/
 
 点击前先调用 `small_human_scroll(tab)` 模拟人类浏览行为（随机小幅滚动 80–280px）。获取卡片坐标时先执行 `scrollIntoView({block:'center', behavior:'instant'})`，确保卡片在视口内再取 `getBoundingClientRect()` 坐标，避免视口外点击失效导致 JD 错配。CDP 鼠标点击卡片中心坐标，等待 1.5–2.5 秒。
 
+**encryptJobId 致命检查**：每张卡片提取出的 `job_id`（即 encryptJobId，从卡片链接 `/job_detail/<id>` 中正则提取）若为空字符串，视为重大异常（正常情况下必定存在），记录 `log.error` 后直接 `sys.exit(1)` 终止程序，不再继续运行。
+
 **面板公司校验（防错配）**：点击后从 JD 面板读取公司名（`.job-detail-header .company-info .name`），与卡片列表中的公司名比对，不匹配则跳过该卡片，避免处理旧面板内容写入错误记录。
 
 **JD 提取（DOM 遍历，方案A）**：取 `.job-detail-body`，以 `h3.title` 为锚点（页面固定的结构标题，属于噪音），收集其后所有兄弟节点文本，遇到 `boss-info / detail-op / work-addr` 等 class 或「去App / 工作地址」等文字则停止。不依赖关键词匹配，天然保留正文首行（即使首行是「职位描述」）和「【岗位职责】」等带括号格式。
@@ -178,7 +180,7 @@ job-hunter/
 
 ```
 city 非空 且 city ≠ TARGET_CITY（"北京"）：
-  → DB 去重（position + company + jd 三字段精确匹配）
+  → DB 去重（按 encryptJobId 精确匹配 jobs.job_id）
       命中 → 跳过，不重复入库
       未命中 → save_job（只存基础字段，analyzed=0, greeted=0）
   → continue（跳过 AI 分析和沟通）
@@ -189,7 +191,7 @@ city == TARGET_CITY 或 city 为空（无法读取时不过滤）：
 
 #### 步骤三：DB 去重
 
-JD 非空时，按（职位名 + 公司名 + JD 全文）三字段精确查询：
+JD 非空时，按 `encryptJobId`（卡片链接中提取的 `job_id`）精确查询 `jobs.job_id`（`get_job_by_encrypt_id`）：
 - **命中** → `continue` 到下一张卡片
 - **未命中** → 继续 AI 分析
 
@@ -412,7 +414,6 @@ db_resume_sent=True       → resume_already_sent=True
 
 `encrypt_job_id` 已在阶段一保证非空，调用一次 `upsert_chat`，写入：
 - `chat_history`（当前消息快照）、基础字段、`resume_sent`
-- **不传** `tendency_score` / `ai_reasoning`（SQL 保留库中已有值）
 
 #### 阶段三：执行操作（委托 execute_session_actions）
 
@@ -474,8 +475,6 @@ db_resume_sent=True       → resume_already_sent=True
 
 **SQL 保护**（`upsert_chat` 的 ON CONFLICT 逻辑）：
 - `resume_sent = MAX(old, new)`：只增不减
-- `tendency_score = CASE WHEN new>0 THEN new ELSE old END`：AI 失败（返回0）不覆盖已有评分
-- `ai_reasoning = CASE WHEN new!='' THEN new ELSE old END`：同上
 
 ### chats 表字段说明
 
@@ -493,8 +492,6 @@ db_resume_sent=True       → resume_already_sent=True
 | `salary_high` | INTEGER | 薪资上限（来自 `highSalary`，原始数值） |
 | `chat_history` | TEXT | JSON 数组，每条含 from/text/time/status/isCard |
 | `resume_sent` | INTEGER | 0=未发 1=已发（任何方式） |
-| `tendency_score` | INTEGER | AI 倾向评分 0-100 |
-| `ai_reasoning` | TEXT | 评分理由（一句话） |
 | `created_at` | TEXT | 首次写入时间 |
 | `updated_at` | TEXT | 最后更新时间 |
 
@@ -505,6 +502,6 @@ db_resume_sent=True       → resume_already_sent=True
 - **不要以管理员身份运行** `start_chrome_job.bat`，否则 Chrome 附加 `--no-sandbox` 导致行为异常
 - **每次重启 Chrome** 需重新手动登录，登录状态保存在 `browser_data/`
 - **随机延时**：卡片点击后等 1.5–2.5s，卡片间隔 1–3s，避免触发频率限制
-- **DB 去重局限**：以 JD 全文精确匹配，内容差一字即视为新岗位；沟通失败（`greeted=0`）的历史记录不会自动重试
+- **DB 去重局限**：以 `encryptJobId` 精确匹配 `jobs.job_id`；沟通失败（`greeted=0`）的历史记录不会自动重试
 - **城市字段为空时不过滤**：避免因 DOM 变化读不到城市而误跳过北京岗位
 - **BOSS 投递限制**：对方未回复时无法投递简历，这是平台规则

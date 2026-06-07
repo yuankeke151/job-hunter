@@ -76,16 +76,6 @@ def init_db():
         c.commit()
 
 
-def get_job_by_content(position: str, company: str, jd: str) -> dict | None:
-    """按（职位名、公司名、JD）精确查找，三者都匹配才算同一岗位。"""
-    with _conn() as c:
-        row = c.execute(
-            "SELECT * FROM jobs WHERE position=? AND company=? AND jd=?",
-            (position.strip(), company.strip(), jd.strip()),
-        ).fetchone()
-        return dict(row) if row else None
-
-
 def save_job(
     *,
     job_id: str,
@@ -154,8 +144,6 @@ def init_chat_db():
                 salary_high     INTEGER DEFAULT 0,
                 chat_history    TEXT    DEFAULT '[]',
                 resume_sent     INTEGER DEFAULT 0,
-                tendency_score  INTEGER DEFAULT 0,
-                ai_reasoning    TEXT    DEFAULT '',
                 created_at      TEXT    DEFAULT (datetime('now','localtime')),
                 updated_at      TEXT    DEFAULT (datetime('now','localtime'))
             )
@@ -203,8 +191,6 @@ def upsert_chat(
     salary_high: int = 0,
     chat_history: list | None = None,
     resume_sent: int = 0,
-    tendency_score: int = 0,
-    ai_reasoning: str = "",
 ):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     hist_json = json.dumps(chat_history or [], ensure_ascii=False)
@@ -213,9 +199,9 @@ def upsert_chat(
             INSERT INTO chats
                 (encrypt_job_id, jobs_db_id, boss_name, company, boss_title,
                  initiator, salary_desc, salary_low, salary_high,
-                 chat_history, resume_sent, tendency_score, ai_reasoning,
+                 chat_history, resume_sent,
                  created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(encrypt_job_id) DO UPDATE SET
                 jobs_db_id     = excluded.jobs_db_id,
                 boss_name      = excluded.boss_name,
@@ -233,16 +219,10 @@ def upsert_chat(
                                  ELSE salary_high END,
                 chat_history   = excluded.chat_history,
                 resume_sent    = MAX(resume_sent, excluded.resume_sent),
-                tendency_score = CASE WHEN excluded.tendency_score > 0
-                                 THEN excluded.tendency_score
-                                 ELSE tendency_score END,
-                ai_reasoning   = CASE WHEN excluded.ai_reasoning != ''
-                                 THEN excluded.ai_reasoning
-                                 ELSE ai_reasoning END,
                 updated_at     = excluded.updated_at
         """, (encrypt_job_id, jobs_db_id, boss_name, company, boss_title,
               initiator, salary_desc, salary_low, salary_high,
-              hist_json, resume_sent, tendency_score, ai_reasoning, now, now))
+              hist_json, resume_sent, now, now))
         c.commit()
 
 

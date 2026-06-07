@@ -269,7 +269,6 @@ def process_session(tab, session_info: dict | None = None):
                 salary_high    = salary_high,
                 chat_history   = history_list,
                 resume_sent    = 1 if resume_already_sent else 0,
-                # tendency_score / ai_reasoning 不传，保留库中已有值
             )
             log.info(f"  [DB] 已写入当前状态（resume_sent={1 if resume_already_sent else 0}）")
         else:

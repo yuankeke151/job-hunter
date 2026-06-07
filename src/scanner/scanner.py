@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scanner import analyzer, salary_decoder
 from config import CDP_SCANNER_URL, SCAN_API_ENABLED, SCAN_GREET_ENABLED
-from shared.database import init_db, get_job_by_content, save_job
+from shared.database import init_db, get_job_by_encrypt_id, save_job
 from shared.cdp_utils import evaluate, cdp_click, cdp_wheel, random_delay, small_human_scroll, is_browser_alive
 from shared.logger import log
 
@@ -289,6 +289,11 @@ def scan_page():
                 experience   = card["experience"]   or "(无)"
                 company_size = card["company_size"] or "(无)"
 
+                encrypt_job_id = card.get("job_id", "")
+                if not encrypt_job_id:
+                    log.error(f"      [致命] 未获取到 encryptJobId（idx={idx}），程序终止")
+                    sys.exit(1)
+
                 salary, salary_ok = salary_decoder.decode(tab, card.get("salary_raw", ""))
 
                 log.info(f"[{idx+1:02d}] {name}  ·  {company}")
@@ -336,11 +341,11 @@ def scan_page():
                     if city and city != TARGET_CITY:
                         log.info(f"      [城市] {city} ≠ {TARGET_CITY}，跳过解析")
                         if jd:
-                            if get_job_by_content(name, company, jd):
+                            if get_job_by_encrypt_id(encrypt_job_id):
                                 log.debug("      [DB] 已存储，跳过")
                             else:
                                 rowid = save_job(
-                                    job_id       = card.get("job_id", ""),
+                                    job_id       = encrypt_job_id,
                                     company      = company,
                                     position     = name,
                                     jd           = jd,
@@ -359,7 +364,7 @@ def scan_page():
                         continue
 
                     # ── DB 去重：已存储过则跳过 ───────────────────────────────
-                    if jd and get_job_by_content(name, company, jd):
+                    if jd and get_job_by_encrypt_id(encrypt_job_id):
                         log.debug("      [DB] 已存储，跳过 → 下一岗位")
                         divider()
                         random_delay(1, 3)
@@ -457,7 +462,7 @@ def scan_page():
 
                     if jd:
                         rowid = save_job(
-                            job_id         = card.get("job_id", ""),
+                            job_id         = encrypt_job_id,
                             company        = company,
                             position       = name,
                             jd             = jd,

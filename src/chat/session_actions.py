@@ -23,19 +23,14 @@ _SYS_PROMPT = """\
 你是专业求职助手，帮助用户与招聘HR进行自然、专业的中文沟通。
 
 根据职位JD（含薪资范围，如有）、用户简历、完整聊天记录，完成以下任务：
-0. 若提供了薪资范围，可作为评估职位匹配度和生成回复内容的参考依据
+0. 若提供了薪资范围，可作为生成回复内容的参考依据
    （如薪资明显契合或聊天中提到薪资话题时自然回应，无需主动炫耀或纠结数字）
-1. 评估HR倾向性分数（0-100）：
-   - 0-30  ：不感兴趣/敷衍
-   - 30-60 ：例行流程/一般
-   - 60-80 ：较感兴趣/主动跟进
-   - 80-100：非常感兴趣/积极推进
-2. 若 need_self_promo=true：生成简历投递后的自我推荐，100-150字，自然专业，
+1. 若 need_self_promo=true：生成简历投递后的自我推荐，100-150字，自然专业，
    突出与岗位最相关的 2-3 个经历或技能，结尾表达期待沟通
-3. 若 need_reply=true：针对HR最新消息生成回复，50-150字，语气自然
+2. 若 need_reply=true：针对HR最新消息生成回复，50-150字，语气自然
 
 只输出合法JSON，不含任何markdown或额外文字：
-{"self_promo": "...", "reply": "...", "tendency_score": 75, "reasoning": "一句话说明评分依据"}
+{"self_promo": "...", "reply": "..."}
 
 不需要的字段填空字符串 ""。\
 """
@@ -70,7 +65,7 @@ def call_ai(
     need_reply: bool,
     need_self_promo: bool = False,
 ) -> dict:
-    """调用 AI，返回 {self_promo, reply, tendency_score, reasoning}。"""
+    """调用 AI，返回 {self_promo, reply}。"""
     salary_desc = boss_info.get("salaryDesc", "")
     salary_line = f"薪资范围：{salary_desc}\n" if salary_desc else ""
     jd_section  = f"【职位JD】\n公司：{boss_info.get('companyName','')}\n{salary_line}{jd[:2500]}\n\n"
@@ -82,7 +77,7 @@ def call_ai(
         f"【我的简历】\n{resume[:2500]}\n\n"
         f"【完整聊天记录】\n{_fmt_history(messages)}"
     )
-    _empty = {"self_promo": "", "reply": "", "tendency_score": 0, "reasoning": ""}
+    _empty = {"self_promo": "", "reply": ""}
     try:
         resp = _get_client().chat.completions.create(
             model=AI_MODEL,
@@ -103,10 +98,8 @@ def call_ai(
             return _empty
         result = json.loads(raw)
         return {
-            "self_promo"     : result.get("self_promo", ""),
-            "reply"          : result.get("reply", ""),
-            "tendency_score" : min(max(int(result.get("tendency_score", 0)), 0), 100),
-            "reasoning"      : result.get("reasoning", ""),
+            "self_promo" : result.get("self_promo", ""),
+            "reply"      : result.get("reply", ""),
         }
     except json.JSONDecodeError as e:
         log.error(f"  [AI] JSON 解析失败: {e}  原始响应: {raw!r:.100}")
@@ -614,7 +607,6 @@ def execute_session_actions(
             return
         log.info(f"  [AI] 生成{action_label}中...")
         ai_result = call_ai(chat_info, jd, resume, messages, need_reply=False, need_self_promo=True)
-        log.info(f"  [AI] 倾向分: {ai_result['tendency_score']}/100  {ai_result['reasoning']}")
         promo = ai_result.get("self_promo", "")
         if promo:
             log.info(f"  [AI] 生成成功（{len(promo)} 字）")
@@ -666,7 +658,6 @@ def execute_session_actions(
                 need_reply=need_reply,
                 need_self_promo=need_self_promo,
             )
-            log.info(f"  [AI] 倾向分: {ai_result['tendency_score']}/100  {ai_result['reasoning']}")
             if need_self_promo and ai_result.get("self_promo"):
                 _type_and_log(tab, ai_result["self_promo"], company[:10])
                 if need_reply and ai_result.get("reply"):
