@@ -17,6 +17,9 @@ output_resumes/**
 # 敏感配置（API Key 等）
 src/confidential.py
 
+# 调试脚本生成的临时附件产物
+src/debug/test_attachment_*.pdf
+
 # Python 缓存
 __pycache__/
 *.py[cod]

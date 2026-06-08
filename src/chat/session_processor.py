@@ -29,9 +29,6 @@ _JS_CHAT_INFO = """
             name         : c.name          || '',
             bothTalked   : !!c.bothTalked,
             jobName      : c.jobName       || '',
-            salaryDesc   : c.salaryDesc    || '',
-            lowSalary    : c.lowSalary     || 0,
-            highSalary   : c.highSalary    || 0,
             locationName : c.locationName  || '',
         });
     } catch(e) { return null; }
@@ -157,12 +154,8 @@ def process_session(tab, session_info: dict | None = None):
         company        = chat_info.get("companyName", "") or (session_info or {}).get("company", "")
         boss_title     = chat_info.get("title",       "") or (session_info or {}).get("title",   "")
         boss_name      = chat_info.get("name",        "") or (session_info or {}).get("name",    "")
-        salary_desc    = chat_info.get("salaryDesc",  "")
-        salary_low     = chat_info.get("lowSalary",   0)
-        salary_high    = chat_info.get("highSalary",  0)
         log.info(f"  公司: {company}  Boss: {boss_name}({boss_title})")
         log.info(f"  encryptJobId: {encrypt_job_id or '(未读到)'}")
-        log.info(f"  薪资: {salary_desc or '(未读到)'}")
 
         # encryptJobId 正常情况下必定能读到；读不到说明页面结构异常或选择器失效，
         # 后续 JD 获取/匹配/写库全部依赖该字段，继续运行没有意义，直接终止程序排查
@@ -181,7 +174,8 @@ def process_session(tab, session_info: dict | None = None):
         # 3. 查岗位表
         job_row    = get_job_by_encrypt_id(encrypt_job_id) if encrypt_job_id else None
         jobs_db_id = job_row["id"] if job_row else 0
-        jd         = job_row["jd"] if job_row else ""
+        jd         = job_row["jd"]     if job_row else ""
+        salary     = job_row["salary"] if job_row else ""
         if job_row:
             log.info(f"  匹配到岗位 id={jobs_db_id}: {job_row['position']}")
         else:
@@ -237,8 +231,15 @@ def process_session(tab, session_info: dict | None = None):
                 if saved_id:
                     jobs_db_id = saved_id
                     jd         = detail["jd"]
+                    salary     = detail.get("salary", "")
                     log.info(f"  → 通过「查看职位」补录岗位 id={saved_id}"
                              f"（source=chat, JD {len(jd)} 字）")
+
+            # 兜底：补录后仍无 JD（按钮缺失/详情页超时/JD 为空等），
+            # 本轮无法获得任何岗位上下文，结束该会话处理，留待下轮重试
+            if not jd:
+                log.info("  [跳过] 未匹配到岗位记录且「查看职位」未获取到 JD，结束本轮处理")
+                return
 
         # ══════════════════════════════════════════════════════════════
         # 阶段二：写库（操作前状态，仅此一次）
@@ -264,9 +265,6 @@ def process_session(tab, session_info: dict | None = None):
                 company        = company,
                 boss_title     = boss_title,
                 initiator      = initiator,
-                salary_desc    = salary_desc,
-                salary_low     = salary_low,
-                salary_high    = salary_high,
                 chat_history   = history_list,
                 resume_sent    = 1 if resume_already_sent else 0,
             )
@@ -286,7 +284,8 @@ def process_session(tab, session_info: dict | None = None):
             resume_already_sent = resume_already_sent,
             resume              = resume,
             jd                  = jd,
-            chat_info           = chat_info,
+            salary              = salary,
+            chat_info         = chat_info,
             messages            = messages,
         )
 

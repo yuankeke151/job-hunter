@@ -10,22 +10,14 @@ import re
 from pathlib import Path
 
 import pdfplumber
-from openai import OpenAI
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import API_KEY, API_BASE_URL, AI_MODEL, RESUME_PATH, SCORE_THRESHOLD
+from config import AI_MODEL, RESUME_PATH, SCORE_THRESHOLD
+from shared.ai_client import get_client
 from shared.logger import log as logger
 
 _RESUME_TXT = RESUME_PATH.with_suffix(".txt")
 _resume_cache: str = ""
-_client: OpenAI | None = None
-
-
-def _get_client() -> OpenAI:
-    global _client
-    if _client is None:
-        _client = OpenAI(api_key=API_KEY, base_url=API_BASE_URL)
-    return _client
 
 
 def _load_resume() -> str:
@@ -48,7 +40,8 @@ def _load_resume() -> str:
 _SYSTEM_PROMPT = """\
 你是专业职业顾问，分析候选人简历与目标职位的匹配度。
 若提供了薪资范围，可作为匹配度评估的参考依据之一
-（如薪资明显低于候选人预期或行业水平，可在 skip_reason 中说明）。
+（如薪资明显低于候选人预期或行业水平，可在 skip_reason 中说明,
+候选人的合理薪资范围在15-25k左右，如果目标岗位的薪资下限在30k及以上，则该岗位并不适合候选人，建议跳过）。
 请只输出合法 JSON，格式如下（不含任何 markdown 或额外文字）：
 {
   "match_score": <0-100 整数>,
@@ -84,7 +77,7 @@ def analyze_job(company: str, position: str, jd: str, salary: str = "") -> dict:
     )
 
     try:
-        resp = _get_client().chat.completions.create(
+        resp = get_client().chat.completions.create(
             model=AI_MODEL,
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},

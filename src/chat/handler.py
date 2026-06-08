@@ -31,14 +31,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import CDP_CHAT_URL, POLL_LIMIT, CONTINUOUS_POLL
 from shared.cdp_utils import (cdp_click, random_delay, evaluate, small_human_scroll,
-                              is_browser_alive, silence_pychrome_recv_loop_noise)
+                              is_browser_alive, silence_pychrome_recv_loop_noise,
+                              scroll_into_view_and_click, SESSION_LI)
 from shared.database import init_chat_db
 from shared.logger import log
 from chat.session_processor import process_session, is_session_too_old
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
 CDP_URL    = CDP_CHAT_URL   # port 9223，由 start_chrome_chat.bat 启动
-SESSION_LI = ".user-list-content > ul:nth-child(2) > li"
 
 _JS_GET_SESSIONS = f"""
 (function() {{
@@ -169,22 +169,9 @@ def main():
 
                 try:
                     small_human_scroll(tab, lo=100, hi=350)
-                    js_scroll = f"""
-                    (function() {{
-                        const lis = Array.from(document.querySelectorAll({json.dumps(SESSION_LI)}));
-                        const el  = lis[{s['idx']}];
-                        if (!el) return null;
-                        el.scrollIntoView({{ block: 'center', behavior: 'instant' }});
-                        const r = el.getBoundingClientRect();
-                        return JSON.stringify({{ x: Math.round(r.left + r.width/2),
-                                                 y: Math.round(r.top  + r.height/2) }});
-                    }})()
-                    """
-                    rect_raw = evaluate(tab, js_scroll)
-                    if rect_raw:
-                        pos = json.loads(rect_raw)
-                        cdp_click(tab, pos["x"], pos["y"])
-                    else:
+                    locate_js = (f"return Array.from(document.querySelectorAll("
+                                 f"{json.dumps(SESSION_LI)}))[{s['idx']}];")
+                    if not scroll_into_view_and_click(tab, locate_js, delay=None):
                         cdp_click(tab, s["center"]["x"], s["center"]["y"])
                     random_delay(1.5, 2.5)
                     process_session(tab, session_info=s)

@@ -5,6 +5,9 @@ import threading
 import requests
 from shared.logger import log
 
+# 会话卡片选择器（chat 模块两侧共用：handler.py 轮询遍历列表 / session_actions.py 回退后重新定位卡片）
+SESSION_LI = ".user-list-content > ul:nth-child(2) > li"
+
 
 def evaluate(tab, js: str):
     try:
@@ -24,6 +27,37 @@ def cdp_click(tab, x: float, y: float):
 
 def random_delay(lo: float = 1.0, hi: float = 3.0):
     time.sleep(random.uniform(lo, hi))
+
+
+def scroll_into_view_and_click(tab, locate_js: str, delay: tuple[float, float] | None = (1.5, 2.5)) -> bool:
+    """定位元素 → scrollIntoView 滚入视口中央 → 取重排后的最新坐标 → cdp_click。
+
+    locate_js: 一段返回目标元素（或 null/undefined）的 JS 语句序列（不含外层 IIFE 包裹），
+    例如 `"return document.querySelectorAll('li')[2];"`。
+    防视口外点击失效的通用模式（与 CLAUDE.md「左侧会话卡片点击」一节一致）：
+    先 scrollIntoView 让目标进入视口，等待重排完成后再用 getBoundingClientRect
+    取此刻坐标点击，避免目标在视口外时坐标失效。
+    """
+    js = f"""
+    (function() {{
+        const el = (function() {{ {locate_js} }})();
+        if (!el) return null;
+        el.scrollIntoView({{block: 'center', behavior: 'instant'}});
+        const r = el.getBoundingClientRect();
+        return JSON.stringify({{x: Math.round(r.left + r.width/2), y: Math.round(r.top + r.height/2)}});
+    }})()
+    """
+    val = evaluate(tab, js)
+    if not val or val == "null":
+        return False
+    try:
+        pos = json.loads(val)
+    except Exception:
+        return False
+    cdp_click(tab, pos["x"], pos["y"])
+    if delay:
+        random_delay(*delay)
+    return True
 
 
 def cdp_wheel(tab, x: float, y: float, delta_y: int):

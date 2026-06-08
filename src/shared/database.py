@@ -139,21 +139,15 @@ def init_chat_db():
                 company         TEXT    DEFAULT '',
                 boss_title      TEXT    DEFAULT '',
                 initiator       TEXT    DEFAULT 'me',
-                salary_desc     TEXT    DEFAULT '',
-                salary_low      INTEGER DEFAULT 0,
-                salary_high     INTEGER DEFAULT 0,
                 chat_history    TEXT    DEFAULT '[]',
                 resume_sent     INTEGER DEFAULT 0,
                 created_at      TEXT    DEFAULT (datetime('now','localtime')),
                 updated_at      TEXT    DEFAULT (datetime('now','localtime'))
             )
         """)
-        # chats 表迁移：补 initiator、salary_*（旧库没有这些列）
+        # chats 表迁移：补 initiator（旧库没有这一列）
         for col, defn in [
             ("initiator",   "TEXT DEFAULT 'me'"),
-            ("salary_desc", "TEXT DEFAULT ''"),
-            ("salary_low",  "INTEGER DEFAULT 0"),
-            ("salary_high", "INTEGER DEFAULT 0"),
         ]:
             try:
                 c.execute(f"ALTER TABLE chats ADD COLUMN {col} {defn}")
@@ -186,9 +180,6 @@ def upsert_chat(
     company: str = "",
     boss_title: str = "",
     initiator: str = "me",
-    salary_desc: str = "",
-    salary_low: int = 0,
-    salary_high: int = 0,
     chat_history: list | None = None,
     resume_sent: int = 0,
 ):
@@ -198,31 +189,20 @@ def upsert_chat(
         c.execute("""
             INSERT INTO chats
                 (encrypt_job_id, jobs_db_id, boss_name, company, boss_title,
-                 initiator, salary_desc, salary_low, salary_high,
-                 chat_history, resume_sent,
+                 initiator, chat_history, resume_sent,
                  created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(encrypt_job_id) DO UPDATE SET
                 jobs_db_id     = excluded.jobs_db_id,
                 boss_name      = excluded.boss_name,
                 company        = excluded.company,
                 boss_title     = excluded.boss_title,
                 initiator      = excluded.initiator,
-                salary_desc    = CASE WHEN excluded.salary_desc != ''
-                                 THEN excluded.salary_desc
-                                 ELSE salary_desc END,
-                salary_low     = CASE WHEN excluded.salary_low > 0
-                                 THEN excluded.salary_low
-                                 ELSE salary_low END,
-                salary_high    = CASE WHEN excluded.salary_high > 0
-                                 THEN excluded.salary_high
-                                 ELSE salary_high END,
                 chat_history   = excluded.chat_history,
                 resume_sent    = MAX(resume_sent, excluded.resume_sent),
                 updated_at     = excluded.updated_at
         """, (encrypt_job_id, jobs_db_id, boss_name, company, boss_title,
-              initiator, salary_desc, salary_low, salary_high,
-              hist_json, resume_sent, now, now))
+              initiator, hist_json, resume_sent, now, now))
         c.commit()
 
 
@@ -262,7 +242,41 @@ def get_job_by_encrypt_id(encrypt_job_id: str) -> dict | None:
     """用 encrypt_job_id 匹配 jobs 表的 job_id 字段。"""
     with _conn() as c:
         row = c.execute(
-            "SELECT id, company, position, jd FROM jobs WHERE job_id=?",
+            "SELECT id, company, position, jd, salary, greeted FROM jobs WHERE job_id=?",
             (encrypt_job_id,)
         ).fetchone()
         return dict(row) if row else None
+
+
+def update_job_analysis(
+    job_id: int,
+    *,
+    salary: str = "",
+    salary_ok: int = 0,
+    analyzed: int = 0,
+    score: int = 0,
+    should_apply: int = 0,
+    key_matches: list | None = None,
+    missing_skills: list | None = None,
+    skip_reason: str = "",
+    greeted: int = 0,
+):
+    """
+    更新已存在岗位记录的分析结果与打招呼状态（用于 greeted=0 的历史记录重试，
+    避免对同一 job_id 重复 INSERT 产生重复行）。
+    """
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _conn() as c:
+        c.execute("""
+            UPDATE jobs SET
+                salary = ?, salary_ok = ?, analyzed = ?, score = ?, should_apply = ?,
+                key_matches = ?, missing_skills = ?, skip_reason = ?, greeted = ?,
+                updated_at = ?
+            WHERE id = ?
+        """, (
+            salary, salary_ok, analyzed, score, should_apply,
+            json.dumps(key_matches or [], ensure_ascii=False),
+            json.dumps(missing_skills or [], ensure_ascii=False),
+            skip_reason, greeted, now, job_id,
+        ))
+        c.commit()
