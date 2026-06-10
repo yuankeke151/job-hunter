@@ -103,7 +103,7 @@ job-hunter/
 │   │   ├── messaging.py         # 输入框打字/发送（clear_and_type、click_send、type_and_log）
 │   │   ├── resume_dialog.py     # 默认简历发送弹窗/确认气泡处理（handle_resume_dialog、click_resume_btn）
 │   │   ├── resume_attachment.py # 定制简历附件管理全流程（execute_resume_action、上传/删除/会话卡定位）
-│   │   ├── resume_tailor.py     # 调用 AI 生成定制简历 PDF（generate_tailored_resume）
+│   │   ├── resume_tailor.py     # 调用 AI 生成定制简历 PDF（generate_tailored_resume）；AI 输出 HTML 片段（h1/h2/ul/p），Playwright 渲染为带格式 PDF（居中姓名、分节标题带下划线、列表缩进）
 │   │   ├── interactive_cards.py # 微信交换/沟通意向等非简历交互卡片「同意」批量处理
 │   │   └── job_detail_fetch.py  # 「查看职位」详情页抓取（fetch_job_detail_via_view_job）
 │   ├── debug/                   # 调试脚本（探索选择器、验证流程，非生产代码）
@@ -188,10 +188,6 @@ job-hunter/
 **翻页逻辑**：当前所有卡片都已处理后，同时发送 CDP `mouseWheel` 事件和 JS `window.scrollTo(bottom)` 触发加载，等待 `SCROLL_WAIT` 秒。连续 `STALE_LIMIT` 次滚动后卡片数不再增加，判定到达末页，退出循环。
 
 **停止条件**：每次外层循环开头先检测浏览器是否存活（`is_browser_alive`），浏览器关闭时立即退出；新入库岗位数达到 `MAX_NEW_JOBS`（默认 50）时同样退出。打招呼数量不再作为停止条件。
-
-`MAX_NEW_JOBS` 检查在两处生效（缺一不可，互为补充，避免重复打印退出日志）：
-- **内层 `for` 循环顶部**（`processed_idxs.add` 之前）：达到上限时静默 `break`，防止在同一批卡片中越过上限继续处理后续卡片；同时内层循环也检测浏览器是否存活，关闭时立即 `break`
-- **外层 `while True` 顶部**：打印「`[退出] 已处理 N 个新岗位，停止运行`」并跳出主循环；覆盖"批次卡片恰好在上限处自然耗尽"的边界情况，同时防止死循环
 
 ### 3. 单张卡片处理流程
 
