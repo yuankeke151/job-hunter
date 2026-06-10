@@ -39,13 +39,11 @@ def init_db():
                 city          TEXT    DEFAULT '',
                 recruiter_name  TEXT  DEFAULT '',  -- 招聘者姓名（来自聊天页「查看职位」详情）
                 recruiter_title TEXT  DEFAULT '',  -- 招聘者 title（如"招聘者"）
-                analyzed      INTEGER DEFAULT 0,  -- 0=未解析 1=本次API解析 2=跳过(他端已沟通)
                 score         INTEGER DEFAULT 0,
                 should_apply  INTEGER DEFAULT 0,
                 key_matches   TEXT    DEFAULT '',
                 missing_skills TEXT   DEFAULT '',
                 skip_reason   TEXT    DEFAULT '',
-                greeted       INTEGER DEFAULT 0,  -- 0=未打招呼 1=本次打招呼 2=他端已打招呼
                 resume_file   TEXT    DEFAULT '',
                 created_at    TEXT    DEFAULT (datetime('now','localtime')),
                 updated_at    TEXT    DEFAULT (datetime('now','localtime'))
@@ -63,13 +61,11 @@ def init_db():
             ("recruiter_name",  "TEXT    DEFAULT ''"),
             ("recruiter_title", "TEXT    DEFAULT ''"),
             ("source",         "TEXT    DEFAULT 'scanner'"),
-            ("analyzed",       "INTEGER DEFAULT 0"),
             ("score",          "INTEGER DEFAULT 0"),
             ("should_apply",   "INTEGER DEFAULT 0"),
             ("key_matches",    "TEXT    DEFAULT ''"),
             ("missing_skills", "TEXT    DEFAULT ''"),
             ("skip_reason",    "TEXT    DEFAULT ''"),
-            ("greeted",        "INTEGER DEFAULT 0"),
             ("resume_file",    "TEXT    DEFAULT ''"),
         ]:
             _add_col(c, col, defn)
@@ -90,13 +86,11 @@ def save_job(
     city: str = "",
     recruiter_name: str = "",
     recruiter_title: str = "",
-    analyzed: int = 0,
     score: int = 0,
     should_apply: int = 0,
     key_matches: list | None = None,
     missing_skills: list | None = None,
     skip_reason: str = "",
-    greeted: int = 0,
     resume_file: str = "",
     source: str = "scanner",
 ) -> int:
@@ -107,18 +101,18 @@ def save_job(
             INSERT INTO jobs
                 (job_id, company, position, jd, experience, education, company_size,
                  salary, salary_ok, city, recruiter_name, recruiter_title,
-                 analyzed, score, should_apply, key_matches, missing_skills, skip_reason,
-                 greeted, resume_file, source)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 score, should_apply, key_matches, missing_skills, skip_reason,
+                 resume_file, source)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 job_id, company.strip(), position.strip(), jd.strip(),
                 experience, education, company_size,
                 salary, salary_ok, city, recruiter_name, recruiter_title,
-                analyzed, score, should_apply,
+                score, should_apply,
                 json.dumps(key_matches or [], ensure_ascii=False),
                 json.dumps(missing_skills or [], ensure_ascii=False),
-                skip_reason, greeted, resume_file, source,
+                skip_reason, resume_file, source,
             ),
         )
         c.commit()
@@ -233,7 +227,6 @@ def save_job_from_view_detail(encrypt_job_id: str, detail: dict) -> int:
         salary_ok       = 1 if salary else 0,
         recruiter_name  = detail.get("recruiterName",  ""),
         recruiter_title = detail.get("recruiterTitle", ""),
-        greeted         = 2,
         source          = "chat",
     )
 
@@ -242,41 +235,9 @@ def get_job_by_encrypt_id(encrypt_job_id: str) -> dict | None:
     """用 encrypt_job_id 匹配 jobs 表的 job_id 字段。"""
     with _conn() as c:
         row = c.execute(
-            "SELECT id, company, position, jd, salary, greeted FROM jobs WHERE job_id=?",
+            "SELECT id, company, position, jd, salary FROM jobs WHERE job_id=?",
             (encrypt_job_id,)
         ).fetchone()
         return dict(row) if row else None
 
 
-def update_job_analysis(
-    job_id: int,
-    *,
-    salary: str = "",
-    salary_ok: int = 0,
-    analyzed: int = 0,
-    score: int = 0,
-    should_apply: int = 0,
-    key_matches: list | None = None,
-    missing_skills: list | None = None,
-    skip_reason: str = "",
-    greeted: int = 0,
-):
-    """
-    更新已存在岗位记录的分析结果与打招呼状态（用于 greeted=0 的历史记录重试，
-    避免对同一 job_id 重复 INSERT 产生重复行）。
-    """
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with _conn() as c:
-        c.execute("""
-            UPDATE jobs SET
-                salary = ?, salary_ok = ?, analyzed = ?, score = ?, should_apply = ?,
-                key_matches = ?, missing_skills = ?, skip_reason = ?, greeted = ?,
-                updated_at = ?
-            WHERE id = ?
-        """, (
-            salary, salary_ok, analyzed, score, should_apply,
-            json.dumps(key_matches or [], ensure_ascii=False),
-            json.dumps(missing_skills or [], ensure_ascii=False),
-            skip_reason, greeted, now, job_id,
-        ))
-        c.commit()

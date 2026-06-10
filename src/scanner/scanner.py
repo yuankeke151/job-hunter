@@ -14,8 +14,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from scanner import analyzer, salary_decoder, card_extractor, job_detail_reader, greet_action
-from config import CDP_SCANNER_URL, SCAN_API_ENABLED, SCAN_GREET_ENABLED, MAX_SCAN
-from shared.database import init_db, get_job_by_encrypt_id, save_job, update_job_analysis
+from config import CDP_SCANNER_URL, SCAN_API_ENABLED, SCAN_GREET_ENABLED, MAX_NEW_JOBS
+from shared.database import init_db, get_job_by_encrypt_id, save_job
 from shared.cdp_utils import evaluate, random_delay, is_browser_alive
 from shared.logger import log
 
@@ -65,14 +65,15 @@ def scan_page():
         passed, errors = [], []
         greeted        = 0
         processed_idxs = set()   # 已处理的卡片 idx，防止重复
+        new_jobs_count = 0        # 本次新岗位数（数据库中原本无记录的）
         stale_count    = 0       # 连续滚动无新卡片次数
 
         while True:
             if not is_browser_alive(CDP_URL):
                 log.info("[退出] 检测到浏览器已关闭，停止扫描")
                 break
-            if len(processed_idxs) >= MAX_SCAN:
-                log.info(f"[退出] 已扫描 {MAX_SCAN} 个岗位，停止运行")
+            if new_jobs_count >= MAX_NEW_JOBS:
+                log.info(f"[退出] 已处理 {MAX_NEW_JOBS} 个新岗位，停止运行")
                 break
 
             all_cards = card_extractor.extract_cards(tab)
@@ -102,7 +103,10 @@ def scan_page():
             log.info("=" * 72)
 
             for card in new_cards:
-                if len(processed_idxs) >= MAX_SCAN:
+                if not is_browser_alive(CDP_URL):
+                    log.info("[退出] 检测到浏览器已关闭，停止扫描")
+                    break
+                if new_jobs_count >= MAX_NEW_JOBS:
                     break
                 processed_idxs.add(card["idx"])
 
@@ -120,12 +124,13 @@ def scan_page():
                 # ── 点击前查库：已存储且已打招呼（含他端已打招呼）的岗位
                 #    既无需重新入库也无需重新沟通，直接跳过，省去无意义的点击 ──
                 existing_job = get_job_by_encrypt_id(encrypt_job_id)
-                if existing_job and existing_job.get("greeted", 0) != 0:
-                    log.info(f"[{idx+1:02d}] {name}  ·  {company}  → [DB] 已存储且已打招呼 "
-                             f"(id={existing_job['id']}, greeted={existing_job['greeted']})，跳过点击")
+                if existing_job:
+                    log.info(f"[{idx+1:02d}] {name}  ·  {company}  → [DB] 已存储 (id={existing_job['id']})，跳过")
                     divider()
                     random_delay(1, 3)
                     continue
+
+                new_jobs_count += 1
 
                 salary, salary_ok = salary_decoder.decode(tab, card.get("salary_raw", ""))
 
@@ -185,13 +190,6 @@ def scan_page():
                         random_delay(1, 3)
                         continue
 
-                    # ── existing_job 已在点击前查得（greeted≠0 的记录已在点击前跳过）；
-                    #    此处命中说明是 greeted=0（未沟通/沟通失败）的历史记录，
-                    #    继续走分析+沟通流程重试，最终写库改为 UPDATE 已有记录，
-                    #    避免对同一 job_id 重复 INSERT ──
-                    if existing_job and jd:
-                        log.info(f"      [DB] 已存储但未打招呼 (id={existing_job['id']}, greeted=0)，重新尝试匹配与沟通")
-
                     # ── AI 匹配度分析 ─────────────────────────────────────────
                     analysis     = {}
                     should_apply = False
@@ -220,62 +218,35 @@ def scan_page():
                         log.info("      [分析] SCAN_API_ENABLED=False，跳过 API 分析")
 
                     # ── 立即沟通 ─────────────────────────────────────────────
-                    # greet_status: 0=未打招呼  1=本次打招呼  2=他端已打招呼
-                    greet_status = 0
                     if should_apply and not SCAN_GREET_ENABLED:
                         log.info("      [沟通] SCAN_GREET_ENABLED=False，跳过打招呼")
                     elif should_apply:
-                        greet_status = greet_action.try_greet(tab)
-                        if greet_status > 0:
+                        greet_ok = greet_action.try_greet(tab)
+                        if greet_ok:
                             greeted += 1
-                            label = "本次打招呼" if greet_status == 1 else "他端已打招呼"
-                            log.info(f"      [沟通] {label}（本次共 {greeted} 个）")
+                            log.info(f"      [沟通] 已打招呼（本次共 {greeted} 个）")
 
                     # ── 写入数据库 ────────────────────────────────────────────
-                    if greet_status == 2:
-                        analyzed_val = 2
-                    elif analysis:
-                        analyzed_val = 1
-                    else:
-                        analyzed_val = 0
-
-                    if jd and existing_job:
-                        update_job_analysis(
-                            existing_job["id"],
-                            salary         = salary,
-                            salary_ok      = 1 if salary_ok else 0,
-                            analyzed       = analyzed_val,
-                            score          = analysis.get("match_score", 0),
-                            should_apply   = 1 if analysis.get("should_apply") else 0,
-                            key_matches    = analysis.get("key_matches", []),
-                            missing_skills = analysis.get("missing_skills", []),
-                            skip_reason    = analysis.get("skip_reason", ""),
-                            greeted        = greet_status,
-                        )
-                        log.info(f"      [DB] 已更新 (id={existing_job['id']}, analyzed={analyzed_val}, greeted={greet_status})")
-                    elif jd:
-                        rowid = save_job(
-                            job_id         = encrypt_job_id,
-                            company        = company,
-                            position       = name,
-                            jd             = jd,
-                            experience     = card.get("experience", ""),
-                            education      = card.get("education", ""),
-                            company_size   = card.get("company_size", ""),
-                            salary         = salary,
-                            salary_ok      = 1 if salary_ok else 0,
-                            city           = city,
-                            recruiter_name  = recruiter_name,
-                            recruiter_title = recruiter_title,
-                            analyzed       = analyzed_val,
-                            score          = analysis.get("match_score", 0),
-                            should_apply   = 1 if analysis.get("should_apply") else 0,
-                            key_matches    = analysis.get("key_matches", []),
-                            missing_skills = analysis.get("missing_skills", []),
-                            skip_reason    = analysis.get("skip_reason", ""),
-                            greeted        = greet_status,
-                        )
-                        log.info(f"      [DB] 已保存 (id={rowid}, analyzed={analyzed_val}, greeted={greet_status})")
+                    rowid = save_job(
+                        job_id         = encrypt_job_id,
+                        company        = company,
+                        position       = name,
+                        jd             = jd,
+                        experience     = card.get("experience", ""),
+                        education      = card.get("education", ""),
+                        company_size   = card.get("company_size", ""),
+                        salary         = salary,
+                        salary_ok      = 1 if salary_ok else 0,
+                        city           = city,
+                        recruiter_name  = recruiter_name,
+                        recruiter_title = recruiter_title,
+                        score          = analysis.get("match_score", 0),
+                        should_apply   = 1 if analysis.get("should_apply") else 0,
+                        key_matches    = analysis.get("key_matches", []),
+                        missing_skills = analysis.get("missing_skills", []),
+                        skip_reason    = analysis.get("skip_reason", ""),
+                    )
+                    log.info(f"      [DB] 已保存 (id={rowid})")
 
                     passed.append({**card, "status": "passed", "jd": jd, "analysis": analysis})
 
@@ -289,7 +260,7 @@ def scan_page():
         # ── 4. 汇总 ───────────────────────────────────────────────────────────
         log.info("=" * 72)
         recommended = [r for r in passed if r.get("analysis", {}).get("should_apply")]
-        log.info(f"扫描完成，共处理 {len(processed_idxs)} 个岗位：")
+        log.info(f"扫描完成，共处理 {len(processed_idxs)} 个岗位（其中新岗位 {new_jobs_count} 个）：")
         log.info(f"  成功获取 JD: {len(passed):>3} 个")
         log.info(f"  推荐投递:    {len(recommended):>3} 个")
         log.info(f"  已发起沟通:  {greeted:>3} 个")
