@@ -1,10 +1,9 @@
-import sys, json, re, sqlite3
-from datetime import datetime, timedelta
+import sys, json
 from pathlib import Path
 import pdfplumber
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import (DB_PATH, RESUME_PATH, CHAT_MAX_AGE_DAYS)
+from config import RESUME_PATH
 from shared.cdp_utils import evaluate, read_messages
 from shared.database import (get_chat, upsert_chat, save_job_from_view_detail,
                               get_job_by_encrypt_id)
@@ -66,70 +65,6 @@ def load_resume() -> str:
 
 # ── 时间判断 ──────────────────────────────────────────────────────────────────
 
-def is_session_too_old(time_str: str) -> bool:
-    """
-    判断会话最新消息是否超过 CHAT_MAX_AGE_DAYS 天。
-    time_str 来自左侧会话卡片的 .time 字段：
-      今天   → "14:53"  (HH:MM)
-      昨天   → "昨天"
-      本周   → "周一"~"周日"
-      更早   → "06/01" / "6月1日" 等日期格式
-    """
-    if not time_str:
-        return False
-    t = time_str.strip()
-
-    if re.match(r'^\d{1,2}:\d{2}$', t):
-        return False
-    if '昨天' in t:
-        return False
-    if '周' in t or '星期' in t:
-        return CHAT_MAX_AGE_DAYS < 7
-
-    cutoff = datetime.now() - timedelta(days=CHAT_MAX_AGE_DAYS)
-
-    m = re.match(r'^(\d{1,2})[/-](\d{1,2})$', t)
-    if m:
-        try:
-            d = datetime(datetime.now().year, int(m.group(1)), int(m.group(2)))
-            return d < cutoff
-        except ValueError:
-            return False
-
-    m = re.match(r'^(\d{1,2})月(\d{1,2})日?$', t)
-    if m:
-        try:
-            d = datetime(datetime.now().year, int(m.group(1)), int(m.group(2)))
-            return d < cutoff
-        except ValueError:
-            return False
-
-    return False
-
-
-def get_session_time(tab, chat_info: dict) -> str:
-    """从左侧会话列表找到当前 boss 对应的 li，读取其 .time 字段。"""
-    boss_name = chat_info.get("name", "")
-    js = f"""
-    (function() {{
-        const lis = Array.from(document.querySelectorAll(
-            '.user-list-content > ul:nth-child(2) > li'
-        ));
-        const target = {json.dumps(boss_name)};
-        for (const li of lis) {{
-            const nameEl = li.querySelector('.name-text');
-            if (!nameEl) continue;
-            if (!target || (nameEl.innerText||'').trim() === target) {{
-                const timeEl = li.querySelector('.time');
-                return timeEl ? (timeEl.innerText||'').trim() : '';
-            }}
-        }}
-        return '';
-    }})()
-    """
-    val = evaluate(tab, js)
-    return val if isinstance(val, str) else ''
-
 
 # ── 单个会话处理 ──────────────────────────────────────────────────────────────
 
@@ -164,14 +99,7 @@ def process_session(tab, session_info: dict | None = None):
                       f"该字段正常情况下必定存在，可能是页面结构变化导致选择器失效，程序退出")
             sys.exit(1)
 
-        # 2. 时间检查
-        session_time = (session_info or {}).get("time", "") or get_session_time(tab, chat_info)
-        if is_session_too_old(session_time):
-            log.info(f"  → 最新消息 {session_time!r} 超过一周，跳过")
-            return
-        log.info(f"  → 最新消息时间: {session_time!r}（一周内）")
-
-        # 3. 查岗位表
+        # 2. 查岗位表
         job_row    = get_job_by_encrypt_id(encrypt_job_id) if encrypt_job_id else None
         jobs_db_id = job_row["id"] if job_row else 0
         jd         = job_row["jd"]     if job_row else ""

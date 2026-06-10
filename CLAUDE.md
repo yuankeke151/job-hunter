@@ -145,7 +145,7 @@ job-hunter/
 |------|------|--------|------|
 | `TARGET_CITY` | scanner.py | `"北京"` | 目标城市，非此城市只入库不解析 |
 | `STALE_LIMIT` | scanner.py | `2` | 连续无新卡片次数达到此值则判定末页停止 |
-| `MAX_SCAN` | config.py | `100` | 单次运行最多扫描岗位数，达到后停止 |
+| `MAX_NEW_JOBS` | config.py | `50` | 单次运行最多处理的新岗位数（数据库中原本无记录的），达到后停止 |
 | `SCAN_API_ENABLED` | config.py | `True` | `True`=调用 AI API 分析匹配度；`False`=跳过，score=0 |
 | `SCAN_GREET_ENABLED` | config.py | `True` | `True`=点击「立即沟通」并处理弹窗；`False`=只扫描不打招呼 |
 | `SCORE_THRESHOLD` | config.py | `70` | AI 匹配分阈值，≥70 才推荐投递 |
@@ -187,11 +187,11 @@ job-hunter/
 
 **翻页逻辑**：当前所有卡片都已处理后，同时发送 CDP `mouseWheel` 事件和 JS `window.scrollTo(bottom)` 触发加载，等待 `SCROLL_WAIT` 秒。连续 `STALE_LIMIT` 次滚动后卡片数不再增加，判定到达末页，退出循环。
 
-**停止条件**：每次外层循环开头先检测浏览器是否存活（`is_browser_alive`），浏览器关闭时立即退出；已处理卡片数达到 `MAX_SCAN`（默认 100）时同样退出。打招呼数量不再作为停止条件。
+**停止条件**：每次外层循环开头先检测浏览器是否存活（`is_browser_alive`），浏览器关闭时立即退出；新入库岗位数达到 `MAX_NEW_JOBS`（默认 50）时同样退出。打招呼数量不再作为停止条件。
 
-`MAX_SCAN` 检查在两处生效（缺一不可，互为补充，避免重复打印退出日志）：
-- **内层 `for` 循环顶部**（`processed_idxs.add` 之前）：达到上限时静默 `break`，防止在同一批卡片中越过上限继续处理后续卡片（DB 去重 / 非目标城市 / 面板公司不匹配 / DOM 不存在等早退 `continue` 分支不会绕过这个检查——因为检查在分支判断之前就已执行）
-- **外层 `while True` 顶部**：打印「`[退出] 已扫描 N 个岗位，停止运行`」并跳出主循环；这是唯一的日志打印点，覆盖"批次卡片恰好在 `MAX_SCAN` 处自然耗尽"的边界情况（此时内层 `for` 不会再触发检查），同时防止死循环
+`MAX_NEW_JOBS` 检查在两处生效（缺一不可，互为补充，避免重复打印退出日志）：
+- **内层 `for` 循环顶部**（`processed_idxs.add` 之前）：达到上限时静默 `break`，防止在同一批卡片中越过上限继续处理后续卡片；同时内层循环也检测浏览器是否存活，关闭时立即 `break`
+- **外层 `while True` 顶部**：打印「`[退出] 已处理 N 个新岗位，停止运行`」并跳出主循环；覆盖"批次卡片恰好在上限处自然耗尽"的边界情况，同时防止死循环
 
 ### 3. 单张卡片处理流程
 
@@ -203,9 +203,9 @@ job-hunter/
 
 **encryptJobId 致命检查**：若提取结果为空字符串，视为重大异常（正常情况下必定存在），记录 `log.error` 后直接 `sys.exit(1)` 终止程序，不再继续运行。
 
-拿到 `encrypt_job_id` 后，**点击卡片之前**先按其精确查询 `jobs.job_id`（`get_job_by_encrypt_id`，返回 `id` 与 `greeted` 字段，结果记为 `existing_job`，供后续步骤复用，不再重复查询）：
-- **命中且 `greeted ≠ 0`**（本次已打招呼/他端已打招呼）→ 该岗位既无需重新入库也无需重新沟通，记录日志「已存储且已打招呼，跳过点击」，直接 `continue` 到下一张卡片，**不点击卡片**
-- **命中但 `greeted = 0`**（未沟通成功，历史遗留）或 **未命中** → 继续点击卡片，进入步骤二
+拿到 `encrypt_job_id` 后，**点击卡片之前**先按其精确查询 `jobs.job_id`（`get_job_by_encrypt_id`，结果记为 `existing_job`，供后续步骤复用，不再重复查询）：
+- **命中**（已存在于 DB）→ 既无需重新入库也无需重新沟通，记录日志「已存储，跳过点击」，直接 `continue` 到下一张卡片，**不点击卡片**，也**不计入 `new_jobs_count`**
+- **未命中**（全新岗位）→ `new_jobs_count += 1`，继续点击卡片，进入步骤二
 
 #### 步骤二：点击卡片，读取 JD 和城市
 
@@ -221,20 +221,12 @@ job-hunter/
 
 ```
 city 非空 且 city ≠ TARGET_CITY（"北京"）：
-  → 复用步骤一查得的 existing_job 去重（无需再次查库）
-      existing_job 非空 → 跳过，不重复入库
-      existing_job 为空 → save_job（只存基础字段，analyzed=0, greeted=0）
+  → save_job（只存基础字段，不做 AI 分析）
   → continue（跳过 AI 分析和沟通）
 
 city == TARGET_CITY 或 city 为空（无法读取时不过滤）：
   → 继续后续步骤
 ```
-
-#### `greeted=0` 历史记录重试
-
-走到此处的 `existing_job`（步骤一查得）必然是 `greeted = 0`（`greeted ≠ 0` 的记录已在步骤一跳过点击）。若 JD 非空：
-- `existing_job` 非空 → 记录日志「已存储但未打招呼，重新尝试匹配与沟通」，照常往下走 AI 分析 + 立即沟通流程；最终写库改为 `update_job_analysis(existing_job["id"], ...)` 按 `id` UPDATE 已有记录，而非 `save_job` 新建一行（避免对同一 `job_id` 重复 `INSERT` 产生重复记录）
-- `existing_job` 为空 → 继续 AI 分析，最终走 `save_job` 新建记录
 
 #### 步骤四：AI 匹配分析（受 `SCAN_API_ENABLED` 控制）
 
@@ -249,24 +241,17 @@ city == TARGET_CITY 或 city 为空（无法读取时不过滤）：
 
 条件：`should_apply = True` 且 `SCAN_GREET_ENABLED = True`。`SCAN_GREET_ENABLED=False` 时跳过此步骤（只记录推荐，不点击沟通按钮）。记录 `url_before`，CDP 点击 `.op-btn-chat`，等待 1–1.5 秒，检测结果：
 
-| 检测结果 | 含义 | 处理 | greet_status |
+| 检测结果 | 含义 | 处理 | greet_ok |
 |---------|------|------|---|
-| `.cancel-btn` 出现 | 首次沟通，弹窗出现 | 点击「留在此页」，等 0.5–1s | 1 |
-| URL 发生变化 | 他端已沟通，直接跳转会话列表 | `Page.navigate` 回 `url_before` → 等 2.5–3.5s → 点击「数据分析师」求职期望 tab → 等 2–2.5s | 2 |
-| 两者都没有 | 异常，点击无响应 | 跳过 | 0 |
+| `.cancel-btn` 出现 | 首次沟通，弹窗出现 | 点击「留在此页」，等 0.5–1s | True |
+| URL 发生变化 | 他端已沟通，直接跳转会话列表 | `Page.navigate` 回 `url_before` → 等 2.5–3.5s → 点击「数据分析师」求职期望 tab → 等 2–2.5s | True |
+| 两者都没有 | 异常，点击无响应 | 跳过 | False |
 
 **回退后恢复**：`Page.navigate` 回原 URL 后，页面默认停在「推荐」tab，需点击 `.expect-item`（含"数据分析师"文字）切回目标搜索结果，等待列表刷新后继续扫描。
 
 #### 步骤六：写入数据库
 
-条件：JD 非空。按步骤三是否命中已有记录分两种写法：
-- **命中已有记录**（`greeted=0` 重试场景）→ `update_job_analysis(existing_job["id"], ...)`，按 `id` UPDATE 薪资/分析结果/打招呼状态等字段
-- **未命中**（全新岗位）→ `save_job(...)`，INSERT 完整新记录
-
-`analyzed` 取值：
-- `greet_status = 2` → `analyzed = 2`（跳过 AI，因他端已沟通）
-- `analysis` 非空 → `analyzed = 1`
-- 否则 → `analyzed = 0`
+条件：JD 非空。全新岗位走 `save_job(...)`，INSERT 完整新记录。
 
 ### 4. 汇总输出
 
@@ -323,8 +308,7 @@ city == TARGET_CITY 或 city 为空（无法读取时不过滤）：
 |------|--------|------|
 | `CDP_CHAT_PORT` | `9222` | 聊天模块 Chrome 调试端口（与 scanner 共用同一 Chrome 实例） |
 | `CONTINUOUS_POLL` | `False` | `True`：持续轮询左侧会话列表；`False`：处理当前右侧可见会话一次后退出，且不点击左侧卡片 |
-| `POLL_LIMIT` | `20` | 单轮最多处理会话数（仅 `CONTINUOUS_POLL=True` 时生效） |
-| `CHAT_MAX_AGE_DAYS` | `100` | 超过此天数的会话跳过并重头轮询 |
+| `POLL_LIMIT` | `5` | 单轮最多处理会话数（仅 `CONTINUOUS_POLL=True` 时生效） |
 | `REPLY_ENABLED` | `False` | `True`：正常发送自我推荐/AI 回复；`False`：只做卡片同意和发简历，不产生新消息，不调用 AI API |
 | `SEND_ENABLED` | `False` | `True`：点击发送按钮；`False`：只打入输入框，不点击发送（`REPLY_ENABLED=False` 时此开关无效） |
 | `DISCLAIMER` | `""` | 所有消息末尾附加的免责声明（暂时置空） |
@@ -334,8 +318,20 @@ city == TARGET_CITY 或 city 为空（无法读取时不过滤）：
 - 不遍历左侧会话列表，直接对当前右侧可见会话调用一次 `process_session(session_info=None)`，结束后退出
 - 不点击左侧会话卡片，右侧信息全部从 `window.chat.communicating` 和 DOM 读取，不存在左右侧数据错位问题
 
-**左侧会话卡片点击（防视口外失效）：**
-点击前先调用 `small_human_scroll(tab, lo=100, hi=350)` 模拟人类操作，随后执行 `scrollIntoView({block:'center', behavior:'instant'})` 确保卡片进入视口，再取最新坐标点击，防止卡片超出视口时点击失效导致右侧消息框错位。
+**`CONTINUOUS_POLL=True` 时的轮询策略（`processed_states`/`candidates`）：**
+
+每轮维护 `processed_states` dict（`encryptJobId → 上次处理时的 unread 数`），内层 `while processed < POLL_LIMIT` 每次迭代都重新拉取最新会话列表，按以下逻辑筛选候选会话：
+
+- **从未处理过**的会话 → 需处理
+- **已处理过但 `unread` 增加**（即有新消息到达）→ 需处理
+- 其余（已处理且无新消息）→ 跳过
+
+候选会话按 `unread > 0` 优先排序，每次迭代只取排序后的第一个处理，处理后记录当时的 `unread` 值。无候选时退出本轮，等待 3–5s 后开始下一轮。
+
+> **encryptJobId 来源**：`_JS_GET_SESSIONS` 从 `li.__vue__.$props.source.encryptJobId` 读取，不依赖 href 解析。读取失败（空字符串）视为致命错误，`sys.exit(1)` 直接终止。
+
+**左侧会话卡片点击（防视口外失效 + 防列表重排错位）：**
+点击前先调用 `small_human_scroll(tab, lo=100, hi=350)` 模拟人类操作。卡片定位使用 `encryptJobId` 精确匹配（从 `li.__vue__.$props.source.encryptJobId` 读取，不依赖列表索引），通过 `scroll_into_view_and_click` 执行 `scrollIntoView` → 取最新坐标 → 点击，防止列表重排后用旧坐标点到错误会话。点击后轮询 `window.chat.communicating.encryptJobId`，确认右侧已切换到目标会话后再调用 `process_session`。
 
 **`REPLY_ENABLED=False` 时的行为：**
 - `handle_interactive_cards`（卡片同意）和 `execute_resume_action`（发简历）正常执行
@@ -476,11 +472,10 @@ isInteractiveCard = hasCardWrap && cardBtns.length > 0
 1. 读取会话基本信息（`get_current_chat_info`），取出 `encryptJobId`
    **`encryptJobId` 读取失败即视为致命错误**（正常情况下必定存在，读不到说明选择器失效）→
    记录日志后 `sys.exit(1)` 直接终止程序，便于排查，不再继续运行
-2. 时间检查（`is_session_too_old`），超期直接 return
-3. 查岗位表（`get_job_by_encrypt_id`），命中则取出 `jd`，否则 `jd=""`
-4. **一次性读取消息**（`read_messages`），此后整个函数不再调用；消息为空则直接 return
-5. 分类计算：`my_texts` / `boss_texts` / `initiator` / `last_is_boss`
-6. **简历状态检测**（纯读取）：
+2. 查岗位表（`get_job_by_encrypt_id`），命中则取出 `jd`，否则 `jd=""`
+3. **一次性读取消息**（`read_messages`），此后整个函数不再调用；消息为空则直接 return
+4. 分类计算：`my_texts` / `boss_texts` / `initiator` / `last_is_boss`
+5. **简历状态检测**（纯读取）：
 
 ```
 db_resume_sent=True       → resume_already_sent=True
@@ -488,8 +483,8 @@ db_resume_sent=True       → resume_already_sent=True
 以上均不满足              → resume_already_sent=False
 ```
 
-7. 加载简历（`load_resume`）
-8. 未匹配到岗位记录（`job_row` 为空）时：通过「查看职位」补录完整岗位信息
+6. 加载简历（`load_resume`）
+7. 未匹配到岗位记录（`job_row` 为空）时：通过「查看职位」补录完整岗位信息
    （`fetch_job_detail_via_view_job` 点击右侧职位面板「查看职位」→ 在新打开的
    `job_detail` 标签页提取岗位名称/地点/薪资/公司名称/JD/招聘者姓名/招聘者title →
    关闭标签页并切回聊天页 → `save_job_from_view_detail` 写入 jobs 表，`source='chat'`）。
