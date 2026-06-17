@@ -39,8 +39,9 @@ def init_db():
                 city          TEXT    DEFAULT '',
                 recruiter_name  TEXT  DEFAULT '',  -- 招聘者姓名（来自聊天页「查看职位」详情）
                 recruiter_title TEXT  DEFAULT '',  -- 招聘者 title（如"招聘者"）
-                score         INTEGER DEFAULT 0,
-                should_apply  INTEGER DEFAULT 0,
+                greeted       INTEGER DEFAULT 0,   -- 0=未打招呼 1=本次打招呼 2=他端已沟通
+                score         INTEGER DEFAULT -1,  -- -1=未分析 0-100=AI 匹配分
+                should_apply  INTEGER DEFAULT -1,  -- -1=未分析 0=不推荐 1=推荐投递
                 key_matches   TEXT    DEFAULT '',
                 missing_skills TEXT   DEFAULT '',
                 skip_reason   TEXT    DEFAULT '',
@@ -67,6 +68,7 @@ def init_db():
             ("missing_skills", "TEXT    DEFAULT ''"),
             ("skip_reason",    "TEXT    DEFAULT ''"),
             ("resume_file",    "TEXT    DEFAULT ''"),
+            ("greeted",       "INTEGER DEFAULT 0"),
         ]:
             _add_col(c, col, defn)
         c.commit()
@@ -86,8 +88,9 @@ def save_job(
     city: str = "",
     recruiter_name: str = "",
     recruiter_title: str = "",
-    score: int = 0,
-    should_apply: int = 0,
+    greeted: int = 0,
+    score: int = -1,
+    should_apply: int = -1,
     key_matches: list | None = None,
     missing_skills: list | None = None,
     skip_reason: str = "",
@@ -101,15 +104,15 @@ def save_job(
             INSERT INTO jobs
                 (job_id, company, position, jd, experience, education, company_size,
                  salary, salary_ok, city, recruiter_name, recruiter_title,
-                 score, should_apply, key_matches, missing_skills, skip_reason,
+                 greeted, score, should_apply, key_matches, missing_skills, skip_reason,
                  resume_file, source)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             """,
             (
                 job_id, company.strip(), position.strip(), jd.strip(),
                 experience, education, company_size,
                 salary, salary_ok, city, recruiter_name, recruiter_title,
-                score, should_apply,
+                greeted, score, should_apply,
                 json.dumps(key_matches or [], ensure_ascii=False),
                 json.dumps(missing_skills or [], ensure_ascii=False),
                 skip_reason, resume_file, source,
@@ -235,9 +238,59 @@ def get_job_by_encrypt_id(encrypt_job_id: str) -> dict | None:
     """用 encrypt_job_id 匹配 jobs 表的 job_id 字段。"""
     with _conn() as c:
         row = c.execute(
-            "SELECT id, company, position, jd, salary FROM jobs WHERE job_id=?",
+            "SELECT id, company, position, jd, salary, greeted, should_apply, city FROM jobs WHERE job_id=?",
             (encrypt_job_id,)
         ).fetchone()
         return dict(row) if row else None
+
+
+def update_job_by_encrypt_id(
+    encrypt_job_id: str,
+    *,
+    jd: str = "",
+    experience: str = "",
+    education: str = "",
+    company_size: str = "",
+    salary: str = "",
+    salary_ok: int = 0,
+    city: str = "",
+    recruiter_name: str = "",
+    recruiter_title: str = "",
+    greeted: int = 0,
+    score: int = -1,
+    should_apply: int = -1,
+    key_matches: list | None = None,
+    missing_skills: list | None = None,
+    skip_reason: str = "",
+) -> bool:
+    """更新已有岗位的分析结果和沟通状态（按 encryptJobId 精确匹配）。返回是否更新成功。"""
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with _conn() as c:
+        cur = c.execute(
+            """
+            UPDATE jobs SET
+                jd = CASE WHEN ? != '' THEN ? ELSE jd END,
+                experience = ?, education = ?, company_size = ?,
+                salary = ?, salary_ok = ?, city = ?,
+                recruiter_name = ?, recruiter_title = ?,
+                greeted = ?, score = ?, should_apply = ?,
+                key_matches = ?, missing_skills = ?, skip_reason = ?,
+                updated_at = ?
+            WHERE job_id = ?
+            """,
+            (
+                jd, jd, experience, education, company_size,
+                salary, salary_ok, city,
+                recruiter_name, recruiter_title,
+                greeted, score, should_apply,
+                json.dumps(key_matches or [], ensure_ascii=False),
+                json.dumps(missing_skills or [], ensure_ascii=False),
+                skip_reason,
+                now,
+                encrypt_job_id,
+            ),
+        )
+        c.commit()
+        return cur.rowcount > 0
 
 

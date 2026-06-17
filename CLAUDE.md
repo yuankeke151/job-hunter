@@ -200,8 +200,13 @@ job-hunter/
 **encryptJobId 致命检查**：若提取结果为空字符串，视为重大异常（正常情况下必定存在），记录 `log.error` 后直接 `sys.exit(1)` 终止程序，不再继续运行。
 
 拿到 `encrypt_job_id` 后，**点击卡片之前**先按其精确查询 `jobs.job_id`（`get_job_by_encrypt_id`，结果记为 `existing_job`，供后续步骤复用，不再重复查询）：
-- **命中**（已存在于 DB）→ 既无需重新入库也无需重新沟通，记录日志「已存储，跳过点击」，直接 `continue` 到下一张卡片，**不点击卡片**，也**不计入 `new_jobs_count`**
+
 - **未命中**（全新岗位）→ `new_jobs_count += 1`，继续点击卡片，进入步骤二
+- **命中**（已存在于 DB）→ 按以下顺序判断是否跳过：
+  1. 城市非空且 ≠ `TARGET_CITY` → **跳过**（非目标城市，无需再处理）
+  2. `greeted ≠ 0`（已打招呼或他端已沟通）→ **跳过**
+  3. `should_apply == 0`（AI 明确判定不推荐）→ **跳过**
+  4. 以上均不满足（`greeted=0` 且 `should_apply≠0`，可能是 -1 未分析或 1 推荐但沟通未成功）→ **不跳过**，标记 `re_process=True`，重新点击卡片走分析+沟通流程，最终通过 `update_job_by_encrypt_id` 更新已有记录
 
 #### 步骤二：点击卡片，读取 JD 和城市
 
@@ -228,26 +233,33 @@ city == TARGET_CITY 或 city 为空（无法读取时不过滤）：
 
 仅 `SCAN_API_ENABLED=True` 时执行，否则跳过（score=0, should_apply=False）。调用 `analyzer.analyze_job(company, name, jd)`：
 1. 读取简历（优先 `resume/袁柯.txt` 缓存，否则解析 PDF 并写缓存）
-2. 调用 Claude API，System 提示要求只输出 JSON
+2. 调用 AI API，System 提示要求只输出 JSON
 3. 剥除响应中可能的 markdown 代码块（` ```json ``` `）
 4. 解析失败或 API 异常时返回 `score=0, should_apply=False`
 5. `should_apply = score >= SCORE_THRESHOLD`
 
 #### 步骤五：立即沟通（受 `SCAN_GREET_ENABLED` 控制）
 
-条件：`should_apply = True` 且 `SCAN_GREET_ENABLED = True`。`SCAN_GREET_ENABLED=False` 时跳过此步骤（只记录推荐，不点击沟通按钮）。记录 `url_before`，CDP 点击 `.op-btn-chat`，等待 1–1.5 秒，检测结果：
+条件：`should_apply = True` 且 `SCAN_GREET_ENABLED = True`。`SCAN_GREET_ENABLED=False` 时跳过此步骤（`greet_status=0`，只记录推荐，不点击沟通按钮）。记录 `url_before`，CDP 点击 `.op-btn-chat`，等待 1–1.5 秒，检测结果：
 
-| 检测结果 | 含义 | 处理 | greet_ok |
+| 检测结果 | 含义 | 处理 | greet_status |
 |---------|------|------|---|
-| `.cancel-btn` 出现 | 首次沟通，弹窗出现 | 点击「留在此页」，等 0.5–1s | True |
-| URL 发生变化 | 他端已沟通，直接跳转会话列表 | `Page.navigate` 回 `url_before` → 等 2.5–3.5s → 点击「数据分析师」求职期望 tab → 等 2–2.5s | True |
-| 两者都没有 | 异常，点击无响应 | 跳过 | False |
+| `.cancel-btn` 出现 | 首次沟通，弹窗出现 | 点击「留在此页」，等 0.5–1s | 1 |
+| URL 发生变化 | 他端已沟通，直接跳转会话列表 | `Page.navigate` 回 `url_before` → 等 2.5–3.5s → 点击「数据分析师」求职期望 tab → 等 2–2.5s | 2 |
+| 两者都没有 | 异常，点击无响应 | 跳过 | 0 |
+
+`greet_status` 最终写入 `jobs.greeted` 字段。
 
 **回退后恢复**：`Page.navigate` 回原 URL 后，页面默认停在「推荐」tab，需点击 `.expect-item`（含"数据分析师"文字）切回目标搜索结果，等待列表刷新后继续扫描。
 
 #### 步骤六：写入数据库
 
-条件：JD 非空。全新岗位走 `save_job(...)`，INSERT 完整新记录。
+条件：JD 非空。
+
+- **全新岗位**（`re_process=False`）→ `save_job(...)`，INSERT 新记录
+- **重新处理**（`re_process=True`）→ `update_job_by_encrypt_id(...)`，UPDATE 已有记录的分析结果和沟通状态
+
+写入字段含 `greeted`（0/1/2，来自步骤五的 `greet_status`）、`score` 和 `should_apply`（API 未调用时均为 -1）。
 
 ### 4. 汇总输出
 
@@ -273,13 +285,12 @@ city == TARGET_CITY 或 city 为空（无法读取时不过滤）：
 | `recruiter_name` | TEXT | 招聘者姓名（scanner 来自 JD 详情面板 `.job-boss-info`，chat 来自「查看职位」详情页，二者结构相同） |
 | `recruiter_title` | TEXT | 招聘者 title，如"HRBP"（来源同上） |
 | `source` | TEXT | 岗位来源：`scanner`=扫描页 `chat`=聊天页「查看职位」补录 |
-| `analyzed` | INTEGER | 0=未解析 1=本次API解析 2=跳过(他端已沟通) |
-| `score` | INTEGER | AI 匹配分（0–100） |
-| `should_apply` | INTEGER | 是否推荐投递（0/1） |
+| `greeted` | INTEGER | 0=未打招呼（默认） 1=本次打招呼 2=他端已沟通 |
+| `score` | INTEGER | AI 匹配分（-1=未分析，0–100=已分析） |
+| `should_apply` | INTEGER | -1=未分析 0=不推荐 1=推荐投递 |
 | `key_matches` | TEXT | 匹配点（JSON 数组） |
 | `missing_skills` | TEXT | 缺失技能（JSON 数组） |
 | `skip_reason` | TEXT | 不推荐时的原因 |
-| `greeted` | INTEGER | 0=未打招呼 1=本次打招呼 2=他端已打招呼 |
 | `resume_file` | TEXT | 定制简历文件名（暂未实现，默认空） |
 | `created_at` | TEXT | 首次写入时间 |
 | `updated_at` | TEXT | 最后更新时间 |
@@ -308,21 +319,22 @@ city == TARGET_CITY 或 city 为空（无法读取时不过滤）：
 | `REPLY_ENABLED` | `False` | `True`：正常发送自我推荐/AI 回复；`False`：只做卡片同意和发简历，不产生新消息，不调用 AI API |
 | `SEND_ENABLED` | `False` | `True`：点击发送按钮；`False`：只打入输入框，不点击发送（`REPLY_ENABLED=False` 时此开关无效） |
 | `DISCLAIMER` | `""` | 所有消息末尾附加的免责声明（暂时置空） |
-| `GENERATE_TAILORED_RESUME` | `True` | `True`：发简历时优先调用 `resume_tailor.generate_tailored_resume` 按 JD 生成定制简历并上传发送，失败则回退默认简历；`False`：始终发送默认固定简历（见 [chat/resume_attachment.py](src/chat/resume_attachment.py) `execute_resume_action`） |
+| `GENERATE_TAILORED_RESUME` | `True` | `True`：发简历时优先调用 `resume_tailor.generate_tailored_resume` 按 JD 生成定制简历并上传发送，失败则跳过该对话；`False`：始终发送默认固定简历（见 [chat/resume_attachment.py](src/chat/resume_attachment.py) `execute_resume_action`） |
 
 **`CONTINUOUS_POLL=False` 时的行为：**
 - 不遍历左侧会话列表，直接对当前右侧可见会话调用一次 `process_session(session_info=None)`，结束后退出
 - 不点击左侧会话卡片，右侧信息全部从 `window.chat.communicating` 和 DOM 读取，不存在左右侧数据错位问题
 
-**`CONTINUOUS_POLL=True` 时的轮询策略（`processed_states`/`candidates`）：**
+**`CONTINUOUS_POLL=True` 时的轮询策略（`processed_eids`/`candidates`）：**
 
-每轮维护 `processed_states` dict（`encryptJobId → 上次处理时的 unread 数`），内层 `while processed < POLL_LIMIT` 每次迭代都重新拉取最新会话列表，按以下逻辑筛选候选会话：
+每轮维护 `processed_eids` 集合（本轮已处理过的 `encryptJobId`），内层 `while processed < POLL_LIMIT` 每次迭代都重新拉取最新会话列表：
 
-- **从未处理过**的会话 → 需处理
-- **已处理过但 `unread` 增加**（即有新消息到达）→ 需处理
-- 其余（已处理且无新消息）→ 跳过
+- `get_all_sessions` → 过滤已处理 → for 循环按 DOM 顺序依次处理所有候选
+- 每个候选通过 `scroll_into_view_and_click` + `encryptJobId` 精确定位点击（`scrollIntoView` 自然触发虚拟列表向下加载）
+- for 循环结束后 `continue` 回到 while 顶部重读列表，捡起新渲染的会话继续处理
+- 重读后无新候选 → `break` 退出本轮，等待 3–5s 后开始下一轮
 
-候选会话按 `unread > 0` 优先排序，每次迭代只取排序后的第一个处理，处理后记录当时的 `unread` 值。无候选时退出本轮，等待 3–5s 后开始下一轮。
+**不考虑未读消息数量**，不考虑手动翻页（`cdp_wheel`/`scrollBy`），`scroll_into_view_and_click` 逐个定位时已自然触发懒加载。
 
 > **encryptJobId 来源**：`_JS_GET_SESSIONS` 从 `li.__vue__.$props.source.encryptJobId` 读取，不依赖 href 解析。读取失败（空字符串）视为致命错误，`sys.exit(1)` 直接终止。
 
@@ -512,14 +524,14 @@ db_resume_sent=True       → resume_already_sent=True
 
 ```
 场景C：my_texts 为空（Boss 主动发起，我方无消息）
-  → execute_resume_action(tab)（成功则 resume_sent_now=1，等待 1-2s）
+  → execute_resume_action(tab)（成功则 resume_sent_now=1，等待 1-2s；失败则 return 跳过该对话）
   → _send_self_promo("自我介绍")  # call_ai(need_self_promo=True, need_reply=False)
 
 场景A：boss_texts 为空（我方主动发起，Boss 尚未回复）
   → _send_self_promo("自我推荐")  # call_ai(need_self_promo=True, need_reply=False)
 
 场景B：双方均有消息
-  if not resume_already_sent → execute_resume_action(tab)（成功则 resume_sent_now=1，等待 1-2s）
+  if not resume_already_sent → execute_resume_action(tab)（成功则 resume_sent_now=1，等待 1-2s；失败则 return 跳过该对话）
   need_self_promo = (resume_sent_now == 1)
   need_reply      = last_is_boss
   REPLY_ENABLED=False → 跳过；need_self_promo 和 need_reply 均为 False → 跳过 API 调用
@@ -537,21 +549,20 @@ db_resume_sent=True       → resume_already_sent=True
 GENERATE_TAILORED_RESUME=True 且 jd 非空：
   生成定制简历 generate_tailored_resume(company, jd, load_resume()) → pdf_path
   成功则依次：
-    upload_resume_attachment(tab, pdf_path, target)   # 上传附件，结束后回到聊天页重新打开会话
+    upload_resume_attachment(tab, pdf_path, target)   # 上传附件（点击「简历」→ 等待跳转到 /web/geek/resume，最多重试 5 次×2-3s）
+    → random_delay(2, 3)                              # 等发送弹窗关闭
     → click_resume_btn(tab, resume_name_match=tailored_match)  # tailored_match="袁柯_"，点「发简历」触发弹窗 + 选中刚上传的定制简历并发送
-    → delete_resume_attachment(tab, tailored_match, target)     # 发送后清理该附件
-  任一环节失败/异常 → 回退到默认简历发送
-否则（或上面任一步失败）：
+    → delete_resume_attachment(tab, tailored_match, target)     # 删除附件（点击「简历」→ 等待跳转，最多重试 5 次×2-3s）
+  任一环节失败/异常 → return False，上层跳过该对话（不发消息、不切默认简历）
+否则（GENERATE_TAILORED_RESUME=False 或 jd 为空）：
   click_resume_btn(tab)  # 默认 resume_name_match="袁柯"，点工具栏「发简历」+ 处理弹窗
 ```
 
 **模糊匹配字段选取**（`resume_name_match`，子串 `includes` 匹配，避免互相误命中）：
-- 默认简历沿用历史默认值 `"袁柯"`（子串匹配，能匹配到固定文件名 `袁柯.pdf`）
-- 定制简历命名为 `袁柯_{公司名}_{时间戳}.pdf`（见 `resume_tailor.py`）→ 匹配串改用稳定前缀 `"袁柯_"`
+- 默认简历匹配 `"袁柯.pdf"`（完整文件名子串，只命中固定文件 `袁柯.pdf`，不含下划线故不会误命中 `袁柯_xxx.pdf`）
+- 定制简历命名为 `袁柯_{公司名}_{时间戳}.pdf`（见 `resume_tailor.py`）→ 匹配串用稳定前缀 `"袁柯_"`
   而非完整 stem：完整 stem 含公司名+时间戳，平台展示时可能截断/转义导致子串匹配失败；
-  且默认值 `"袁柯"` 是 `"袁柯_..."` 的前缀，二者会互相误命中——因此发送/清理定制简历时
-  显式传入 `"袁柯_"` 而不是依赖默认值，借由「含下划线」与「默认简历文件名只有 `袁柯.pdf`
-  不含下划线」的差异来互不误判
+  且 `"袁柯_"` 不含 `.pdf` 后缀，与默认匹配串 `"袁柯.pdf"` 互相不误判
 
 #### 简历弹窗处理（handle_resume_dialog，`src/chat/resume_dialog.py`）
 
@@ -601,6 +612,6 @@ B. 附件数 == 1 → 非模态确认气泡 .panel-resume.sentence-popover（标
 - **不要以管理员身份运行** `start_chrome.bat`，否则 Chrome 附加 `--no-sandbox` 导致行为异常
 - **每次重启 Chrome** 需重新手动登录，登录状态保存在 `browser_data/`
 - **随机延时**：卡片点击后等 1.5–2.5s，卡片间隔 1–3s，避免触发频率限制
-- **DB 去重与重试（点击前查库）**：拿到 `encryptJobId` 后**先于点击**精确匹配 `jobs.job_id`；命中且 `greeted≠0`（已打招呼/他端已沟通）则直接跳过，连卡片都不点击；`greeted=0`（未沟通/沟通失败）的历史记录或全新岗位才点击卡片，走分析+沟通流程，前者最终通过 `update_job_analysis` 更新已有记录而非重复 `INSERT`
+- **DB 去重（点击前查库）**：拿到 `encryptJobId` 后**先于点击**精确匹配 `jobs.job_id`。命中后按三级条件过滤：非目标城市→跳过；已打招呼(`greeted≠0`)→跳过；明确不推荐(`should_apply=0`)→跳过。均不满足则重新处理（更新已有记录）。未命中才走完整的新岗位入库流程
 - **城市字段为空时不过滤**：避免因 DOM 变化读不到城市而误跳过北京岗位
 - **BOSS 投递限制**：对方未回复时无法投递简历，这是平台规则
