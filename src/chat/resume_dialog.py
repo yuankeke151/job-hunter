@@ -51,7 +51,7 @@ def _handle_resume_confirm_popover(tab) -> bool:
         return False
 
 
-def handle_resume_dialog(tab, resume_name_match: str = "袁柯") -> bool:
+def handle_resume_dialog(tab, resume_name_match: str = "袁柯.pdf") -> bool:
     """
     点击「发简历」后会出现两种互斥的提示之一（取决于简历附件数量，调用方无需预判）：
       A. 附件数 > 1：弹出排他的简历选择模态框 .boss-popup__wrapper
@@ -200,7 +200,7 @@ def handle_resume_dialog(tab, resume_name_match: str = "袁柯") -> bool:
         return False
 
 
-def click_resume_btn(tab, resume_name_match: str = "袁柯") -> bool:
+def click_resume_btn(tab, resume_name_match: str = "袁柯.pdf") -> bool:
     """直接点击工具栏「发简历」按钮并处理弹窗（无消息数量前提条件）。"""
     js_btn = """
     (function() {

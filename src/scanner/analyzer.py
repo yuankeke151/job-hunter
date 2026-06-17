@@ -84,6 +84,7 @@ def analyze_job(company: str, position: str, jd: str, salary: str = "") -> dict:
                 {"role": "user",   "content": user_msg},
             ],
             max_tokens=500,
+            extra_body={"thinking": {"type": "disabled"}},
         )
         raw = resp.choices[0].message.content.strip()
 
@@ -95,7 +96,7 @@ def analyze_job(company: str, position: str, jd: str, salary: str = "") -> dict:
     except json.JSONDecodeError as e:
         logger.error(f"JSON 解析失败: {e}\n原始响应: {raw!r}")
         return {
-            "match_score": 0,
+            "match_score": -1,
             "should_apply": False,
             "key_matches": [],
             "missing_skills": [],
@@ -104,7 +105,7 @@ def analyze_job(company: str, position: str, jd: str, salary: str = "") -> dict:
     except Exception as e:
         logger.error(f"analyze_job 调用失败: {e}")
         return {
-            "match_score": 0,
+            "match_score": -1,
             "should_apply": False,
             "key_matches": [],
             "missing_skills": [],

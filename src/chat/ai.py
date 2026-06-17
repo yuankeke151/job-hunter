@@ -68,6 +68,7 @@ def call_ai(
                 {"role": "user",   "content": user_content},
             ],
             max_tokens=800,
+            extra_body={"thinking": {"type": "disabled"}},
         )
         raw = (resp.choices[0].message.content or "").strip()
         if not raw:

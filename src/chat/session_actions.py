@@ -76,6 +76,9 @@ def execute_session_actions(
         if ok:
             resume_sent_now = 1
             random_delay(1.0, 2.0)
+        else:
+            log.info("  → 简历操作失败，跳过该对话")
+            return
         _send_self_promo("自我介绍")
 
     elif not boss_texts:
@@ -93,6 +96,9 @@ def execute_session_actions(
             if ok:
                 resume_sent_now = 1
                 random_delay(1.0, 2.0)
+            else:
+                log.info("  → 简历操作失败，跳过该对话")
+                return
 
         need_self_promo = resume_sent_now == 1
         need_reply      = last_is_boss

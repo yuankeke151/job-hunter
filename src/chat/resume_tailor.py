@@ -64,6 +64,7 @@ def _generate_resume_html(jd: str, original_resume_text: str) -> str:
                 {"role": "user", "content": user_content},
             ],
             max_tokens=2500,
+            extra_body={"thinking": {"type": "disabled"}},
         )
         raw = (resp.choices[0].message.content or "").strip()
         raw = re.sub(r"^```[a-zA-Z]*\s*", "", raw)

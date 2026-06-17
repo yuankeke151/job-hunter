@@ -1,4 +1,4 @@
-import sys, json, time, random, threading
+import sys, json, time, threading
 from pathlib import Path
 import pychrome
 import requests
@@ -222,19 +222,29 @@ def upload_resume_attachment(tab, pdf_path: Path, target: dict) -> bool:
     """
     log.info(f"  [定制简历-上传] 开始上传附件: {pdf_path.name}")
 
-    # 点击右上角「简历」按钮，等待「附件管理」区域出现（与删除流程入口一致）
+    # 点击右上角「简历」，页面应跳转到 /web/geek/resume，最多重试 5 次
     item = _find_by_text(tab, "简历", exact=True, max_w=120) or _find_by_text(tab, "简历", max_w=120)
     if not item:
         log.warning("  [定制简历-上传] 未找到右上角「简历」按钮")
         return False
-    cdp_click(tab, item["x"], item["y"])
-    random_delay(1.0, 1.5)
+    url_before = evaluate(tab, "window.location.href") or ""
+    for retry in range(5):
+        cdp_click(tab, item["x"], item["y"])
+        random_delay(2.0, 3.0)
+        url_after = evaluate(tab, "window.location.href") or ""
+        if url_after != url_before and "/web/geek/resume" in url_after:
+            log.info(f"  [定制简历-上传] 已跳转到简历管理页 (retry={retry})")
+            break
+        log.warning(f"  [定制简历-上传] 未跳转 (retry={retry+1}/5)，重试...")
+    else:
+        log.warning("  [定制简历-上传] 5 次重试后仍未跳转，跳过该对话")
+        return False
     if not _wait_until(tab, "document.body.innerText.includes('附件管理')", timeout=8):
         log.warning("  [定制简历-上传] 未检测到「附件管理」区域")
         return False
 
     # 附件数量已满检测：.resume-type-title 文案形如「文件（2/3）」，current>=max 时平台不允许再上传，
-    # 直接判定本次上传失败、回退到聊天页，让外层回退到默认简历发送逻辑
+    # 直接判定本次上传失败、跳过该对话
     count_raw = evaluate(tab, """
     (function() {
         const el = document.querySelector('.resume-type-title');
@@ -249,8 +259,7 @@ def upload_resume_attachment(tab, pdf_path: Path, target: dict) -> bool:
             info = json.loads(count_raw)
             log.info(f"  [定制简历-上传] 附件数量: {info['txt']}")
             if info["cur"] >= info["max"]:
-                log.warning(f"  [定制简历-上传] 附件已达上限（{info['txt']}），无法上传新附件，"
-                            f"回退到聊天页并改用默认简历发送")
+                log.warning(f"  [定制简历-上传] 附件已达上限（{info['txt']}），无法上传新附件，跳过该对话")
                 evaluate(tab, "window.history.back()")
                 _wait_until(tab, "window.location.href.includes('/web/geek/chat')", timeout=10)
                 _wait_until(tab, "document.readyState === 'complete'", timeout=10)
@@ -323,7 +332,7 @@ def upload_resume_attachment(tab, pdf_path: Path, target: dict) -> bool:
             or _click_text(tab, "添加", container_sel=sel)):
         log.warning("  [定制简历-上传] 未找到「确定添加」按钮")
         return False
-    random_delay(1.0, 1.5)
+    random_delay(2.0, 2.5)
 
     # 可能出现的提示弹窗，关闭即可（不影响主流程）
     sel2 = _wait_popup_visible(tab, [".boss-popup__wrapper", ".dialog-wrap.upload-preview-dialog"], timeout=4)
@@ -353,12 +362,23 @@ def delete_resume_attachment(tab, name_match: str, target: dict) -> bool:
     """
     log.info(f"  [定制简历-删除] 开始删除附件: {name_match}")
 
+    # 点击右上角「简历」，页面应跳转到 /web/geek/resume，最多重试 5 次
     item = _find_by_text(tab, "简历", exact=True, max_w=120) or _find_by_text(tab, "简历", max_w=120)
     if not item:
         log.warning("  [定制简历-删除] 未找到右上角「简历」按钮")
         return False
-    cdp_click(tab, item["x"], item["y"])
-    random_delay(1.0, 1.5)
+    url_before = evaluate(tab, "window.location.href") or ""
+    for retry in range(5):
+        cdp_click(tab, item["x"], item["y"])
+        random_delay(2.0, 3.0)
+        url_after = evaluate(tab, "window.location.href") or ""
+        if url_after != url_before and "/web/geek/resume" in url_after:
+            log.info(f"  [定制简历-删除] 已跳转到简历管理页 (retry={retry})")
+            break
+        log.warning(f"  [定制简历-删除] 未跳转 (retry={retry+1}/5)，重试...")
+    else:
+        log.warning("  [定制简历-删除] 5 次重试后仍未跳转，跳过该对话")
+        return False
     if not _wait_until(tab, "document.body.innerText.includes('附件管理')", timeout=8):
         log.warning("  [定制简历-删除] 未检测到「附件管理」区域")
         return False
@@ -511,7 +531,7 @@ class _FileChooserCatcher:
 def execute_resume_action(tab, company: str = "", jd: str = "", target: dict | None = None) -> bool:
     """主动点击工具栏「发简历」按钮并处理弹窗。
     GENERATE_TAILORED_RESUME=True 且有 JD 时，先尝试生成定制简历并走"上传→发送→删除"流程；
-    生成/上传/发送任一环节失败则回退到默认固定简历发送。"""
+    生成/上传/发送任一环节失败则跳过该对话。"""
     if GENERATE_TAILORED_RESUME and jd:
         try:
             from chat.resume_tailor import generate_tailored_resume
@@ -526,10 +546,13 @@ def execute_resume_action(tab, company: str = "", jd: str = "", target: dict | N
                 tailored_match = "袁柯_"
                 ok = (upload_resume_attachment(tab, pdf_path, tgt)
                       and click_resume_btn(tab, resume_name_match=tailored_match)
+                      and (random_delay(2.0, 3.0) or True)  # 等发送弹窗关闭
                       and delete_resume_attachment(tab, tailored_match, tgt))
                 if ok:
                     return True
-                log.warning("  [定制简历] 上传/发送/清理流程失败，回退到默认简历发送")
+                log.warning("  [定制简历] 上传/发送/清理流程失败，跳过该对话")
+                return False
         except Exception as e:
-            log.error(f"  [定制简历] 流程异常: {e}，回退到默认简历发送")
+            log.error(f"  [定制简历] 流程异常: {e}，跳过该对话")
+            return False
     return click_resume_btn(tab)
