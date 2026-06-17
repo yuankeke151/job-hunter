@@ -19,6 +19,7 @@ src/confidential.py
 
 # 调试脚本（本地工具，不上传）
 src/debug/**
+!src/debug/.gitkeep
 
 # Python 缓存
 __pycache__/
