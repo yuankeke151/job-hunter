@@ -198,8 +198,7 @@ def upsert_chat(
                 company         = excluded.company,
                 boss_title      = excluded.boss_title,
                 initiator       = excluded.initiator,
-                chat_history    = CASE WHEN LENGTH(excluded.chat_history) >= LENGTH(chat_history)
-                                      THEN excluded.chat_history ELSE chat_history END,
+                chat_history    = excluded.chat_history,
                 resume_sent     = MAX(resume_sent, excluded.resume_sent),
                 sent_self_promo = MAX(sent_self_promo, excluded.sent_self_promo),
                 updated_at      = excluded.updated_at
