@@ -259,7 +259,9 @@ def upload_resume_attachment(tab, pdf_path: Path, target: dict) -> bool:
             if info["cur"] >= info["max"]:
                 log.warning(f"  [定制简历-上传] 附件已达上限（{info['txt']}），无法上传新附件，跳过该对话")
                 evaluate(tab, "window.history.back()")
-                _wait_until(tab, "window.location.href.includes('/web/geek/chat')", timeout=10)
+                if not _wait_until(tab, "window.location.href.includes('/web/geek/chat')", timeout=10):
+                    log.warning("  [定制简历-上传] 回退聊天页超时，跳过")
+                    return False
                 _wait_until(tab, "document.readyState === 'complete'", timeout=10)
                 time.sleep(1.5)
                 click_session_card(tab, target)
@@ -450,7 +452,9 @@ def delete_resume_attachment(tab, name_match: str, target: dict) -> bool:
             return False
     _wait_until(tab, "document.readyState === 'complete'", timeout=10)
     time.sleep(1.0)
-    click_session_card(tab, target)
+    if not click_session_card(tab, target):
+        log.warning("  [定制简历-删除] 切回会话卡片失败")
+        return False
 
     log.info("  [定制简历-删除] ✓ 删除完成")
     return True

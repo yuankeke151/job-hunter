@@ -121,27 +121,17 @@ def main():
 
     _, tab = connect_tab()
 
-    if not is_browser_alive(CDP_URL):
-        log.info("[退出] 检测到浏览器已关闭，程序退出")
-        try: tab.stop()
-        except Exception: pass
-        sys.exit(1)
-
     try:
         if DIRECT_MODE:
             # 测试模式：不点击左侧，直接处理当前右侧可见会话，处理后退出
-            log.info("[轮询] 测试模式（DIRECT_MODE=True），处理当前右侧会话后退出")
+            log.info("[测试] DIRECT_MODE=True，处理当前右侧会话后退出")
             process_session(tab, session_info=None)
             log.info("[退出] 处理完成，程序结束")
-            try: tab.stop()
-            except Exception: pass
             sys.exit(0)
 
         sessions = get_all_sessions(tab)
         if not sessions:
             log.info("[轮询] 未找到任何会话，退出")
-            try: tab.stop()
-            except Exception: pass
             sys.exit(0)
 
         log.info(f"[轮询] 共 {len(sessions)} 个可见会话")

@@ -120,7 +120,7 @@ def fetch_job_detail_via_view_job(tab) -> dict | None:
         except Exception as e:
             log.warning(f"  [查看职位] 关闭详情页标签失败: {e}")
         try:
-            browser.activate_tab(tab)
+            browser.activate_tab(tab.id)
         except Exception as e:
             log.warning(f"  [查看职位] 切回聊天页标签失败: {e}")
 
