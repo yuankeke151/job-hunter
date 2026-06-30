@@ -321,7 +321,7 @@ city == TARGET_CITY 或 city 为空（无法读取时不过滤）：
 | `CONSERVATIVE_CHAT` | `True` | `True`：不回复 boss 消息，仅发简历后或场景 A 下发固定自我介绍；`False`：AI 生成回复 |
 | `SELF_PROMO_TEXT` | (固定文案) | 自我介绍固定文案，所有场景统一使用，不走 AI |
 | `DISCLAIMER` | (免责声明) | 所有消息末尾自动附加 |
-| `GENERATE_TAILORED_RESUME` | `True` | `True`：按 JD 生成定制简历上传发送；`False`：发送默认简历 |
+| `GENERATE_TAILORED_RESUME` | `False` | `True`：按 JD 生成定制简历上传发送；`False`：发送默认简历 |
 
 **轮询策略（`DIRECT_MODE=False`）：**
 

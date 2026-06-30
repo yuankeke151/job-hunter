@@ -140,7 +140,11 @@ def scan_page():
                 else:
                     new_jobs_count += 1
 
-                salary, salary_ok = salary_decoder.decode(tab, card.get("salary_raw", ""))
+                try:
+                    salary, salary_ok = salary_decoder.decode(tab, card.get("salary_raw", ""))
+                except Exception:
+                    log.warning(f"  薪资解码异常，使用原始值")
+                    salary, salary_ok = card.get("salary_raw", ""), 0
 
                 log.info(f"[{idx+1:02d}] {name}  ·  {company}")
                 log.info(f"      经验: {experience}  规模: {company_size}")

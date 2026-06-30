@@ -1,7 +1,5 @@
 import sys, json, time, threading
 from pathlib import Path
-import pychrome
-import requests
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import GENERATE_TAILORED_RESUME

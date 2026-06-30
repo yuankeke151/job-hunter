@@ -112,7 +112,7 @@ def analyze_job(company: str, position: str, jd: str, salary: str = "") -> dict:
             "skip_reason": f"API 调用异常: {e}",
         }
 
-    score = min(max(int(result.get("match_score", 0)), 0), 100)
+    score = min(max(int(result.get("match_score") or 0), 0), 100)
     return {
         "match_score": score,
         "should_apply": score >= SCORE_THRESHOLD,

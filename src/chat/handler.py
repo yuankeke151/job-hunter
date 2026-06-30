@@ -42,7 +42,7 @@ from shared.logger import log
 from chat.session_processor import process_session
 
 # ── 常量 ──────────────────────────────────────────────────────────────────────
-CDP_URL    = CDP_CHAT_URL   # port 9223，由 start_chrome_chat.bat 启动
+CDP_URL    = CDP_CHAT_URL   # 与 scanner 共用同一 Chrome（start_chrome.bat 启动，port 9222）
 
 _JS_GET_SESSIONS = f"""
 (function() {{
@@ -113,7 +113,7 @@ def main():
     silence_pychrome_recv_loop_noise()
 
     log.info("=" * 60)
-    log.info("  chat_handler.py — BOSS直聘 IM 自动化处理")
+    log.info("  handler.py — BOSS直聘 IM 自动化处理")
     log.info(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     log.info("=" * 60)
 
@@ -187,8 +187,9 @@ def main():
                                 break
                             time.sleep(0.5)
                         else:
-                            log.warning(f"  [警告] 右侧未切换到目标会话 {target_id[:20]}，"
+                            log.warning(f"  [跳过] 右侧未切换到目标会话 {target_id[:20]}，"
                                         f"当前={str(evaluate(tab, _JS_CUR_ID))[:20]}")
+                            continue
                         random_delay(0.3, 0.5)
                         process_session(tab, session_info=s)
                         processed += 1
