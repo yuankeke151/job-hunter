@@ -4,7 +4,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from shared.logger import log
 from shared.cdp_utils import random_delay
-from config import REPLY_ENABLED
+from config import REPLY_ENABLED, CONSERVATIVE_CHAT, SELF_PROMO_TEXT
 from chat.ai import call_ai
 from chat.messaging import type_and_log
 from chat.resume_attachment import execute_resume_action
@@ -12,7 +12,6 @@ from chat.interactive_cards import handle_interactive_cards
 
 # 重新导出，供 session_processor 等模块使用（保持原有 import 路径不变）
 from chat.job_detail_fetch import fetch_job_detail_via_view_job  # noqa: F401
-
 
 # ── 会话操作主入口 ────────────────────────────────────────────────────────────
 
@@ -22,6 +21,7 @@ def execute_session_actions(
     boss_texts: list[dict],
     last_is_boss: bool,
     resume_already_sent: bool,
+    self_promo_already_sent: bool,
     resume: str,
     jd: str,
     salary: str,
@@ -57,17 +57,15 @@ def execute_session_actions(
     # ══════════════════════════════════════════════════════════════════════════
 
     def _send_self_promo(action_label: str):
+        """发送固定自我介绍（不再走 AI）。已发送过则跳过。"""
         if not REPLY_ENABLED:
-            log.info("  [AI] REPLY_ENABLED=False，跳过 API 调用和消息发送")
+            log.info("  [自我介绍] REPLY_ENABLED=False，跳过消息发送")
             return
-        log.info(f"  [AI] 生成{action_label}中...")
-        ai_result = call_ai(chat_info, jd, resume, messages, need_reply=False, need_self_promo=True, salary=salary)
-        promo = ai_result.get("self_promo", "")
-        if promo:
-            log.info(f"  [AI] 生成成功（{len(promo)} 字）")
-            type_and_log(tab, promo, company[:10])
-        else:
-            log.info("  [AI] 生成结果为空，跳过")
+        if self_promo_already_sent:
+            log.info(f"  [自我介绍] 已发送过，跳过（去重）")
+            return
+        log.info(f"  [自我介绍] 发送固定{action_label}（{len(SELF_PROMO_TEXT)} 字）")
+        type_and_log(tab, SELF_PROMO_TEXT, company[:10])
 
     if not my_texts:
         # 场景C: Boss 主动发起，我方无消息 → 发简历 + AI 自我介绍
@@ -100,30 +98,29 @@ def execute_session_actions(
                 log.info("  → 简历操作失败，跳过该对话")
                 return
 
-        need_self_promo = resume_sent_now == 1
-        need_reply      = last_is_boss
-        log.info(f"  需要自我推荐: {'是' if need_self_promo else '否'}")
-        log.info(f"  需要回复:     {'是' if need_reply else '否'}"
-                 f"{'（最后发言是我）' if _last_text_msg and _last_text_msg['isSelf'] else ''}")
-        if need_reply and _last_text_msg:
-            log.info(f"  最新Boss消息: {_last_text_msg['text'][:50]!r}")
-
-        if not REPLY_ENABLED:
-            log.info("  [AI] REPLY_ENABLED=False，跳过 API 调用和消息发送")
-        elif not need_self_promo and not need_reply:
-            log.info("  [AI] 无需自我推荐也无需回复，跳过 API 调用")
+        need_self_promo = resume_sent_now == 1 and not self_promo_already_sent
+        need_reply      = False if CONSERVATIVE_CHAT else last_is_boss
+        if need_self_promo:
+            _send_self_promo("自我推荐")
+        if CONSERVATIVE_CHAT:
+            if not need_self_promo and resume_sent_now == 0:
+                log.info("  [保守] 简历此前已发送，无需操作")
         else:
-            log.info("  [AI] 分析中...")
-            ai_result = call_ai(
-                chat_info, jd, resume, messages,
-                need_reply=need_reply,
-                need_self_promo=need_self_promo,
-                salary=salary,
-            )
-            if need_self_promo and ai_result.get("self_promo"):
-                type_and_log(tab, ai_result["self_promo"], company[:10])
-                if need_reply and ai_result.get("reply"):
-                    random_delay(2.0, 3.0)
-            if need_reply and ai_result.get("reply"):
-                type_and_log(tab, ai_result["reply"], company[:10])
+            log.info(f"  需要回复:     {'是' if need_reply else '否'}"
+                     f"{'（最后发言是我）' if _last_text_msg and _last_text_msg['isSelf'] else ''}")
+            if need_reply and _last_text_msg:
+                log.info(f"  最新Boss消息: {_last_text_msg['text'][:50]!r}")
+
+            if not REPLY_ENABLED:
+                log.info("  [AI] REPLY_ENABLED=False，跳过 API 调用和消息发送")
+            elif not need_reply:
+                log.info("  [AI] 无需回复，跳过 API 调用")
+            else:
+                log.info("  [AI] 生成回复中...")
+                reply = call_ai(chat_info, jd, resume, messages, salary=salary)
+                if reply:
+                    log.info(f"  [AI] 生成成功（{len(reply)} 字）")
+                    type_and_log(tab, reply, company[:10])
+                else:
+                    log.info("  [AI] 生成结果为空，跳过")
 

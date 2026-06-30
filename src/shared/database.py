@@ -137,14 +137,16 @@ def init_chat_db():
                 boss_title      TEXT    DEFAULT '',
                 initiator       TEXT    DEFAULT 'me',
                 chat_history    TEXT    DEFAULT '[]',
-                resume_sent     INTEGER DEFAULT 0,
-                created_at      TEXT    DEFAULT (datetime('now','localtime')),
+                resume_sent      INTEGER DEFAULT 0,
+                sent_self_promo  INTEGER DEFAULT 0,
+                created_at       TEXT    DEFAULT (datetime('now','localtime')),
                 updated_at      TEXT    DEFAULT (datetime('now','localtime'))
             )
         """)
-        # chats 表迁移：补 initiator（旧库没有这一列）
+        # chats 表迁移：补旧库缺少的列
         for col, defn in [
-            ("initiator",   "TEXT DEFAULT 'me'"),
+            ("initiator",        "TEXT DEFAULT 'me'"),
+            ("sent_self_promo",  "INTEGER DEFAULT 0"),
         ]:
             try:
                 c.execute(f"ALTER TABLE chats ADD COLUMN {col} {defn}")
@@ -179,6 +181,7 @@ def upsert_chat(
     initiator: str = "me",
     chat_history: list | None = None,
     resume_sent: int = 0,
+    sent_self_promo: int = 0,
 ):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     hist_json = json.dumps(chat_history or [], ensure_ascii=False)
@@ -186,20 +189,21 @@ def upsert_chat(
         c.execute("""
             INSERT INTO chats
                 (encrypt_job_id, jobs_db_id, boss_name, company, boss_title,
-                 initiator, chat_history, resume_sent,
+                 initiator, chat_history, resume_sent, sent_self_promo,
                  created_at, updated_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(encrypt_job_id) DO UPDATE SET
-                jobs_db_id     = excluded.jobs_db_id,
-                boss_name      = excluded.boss_name,
-                company        = excluded.company,
-                boss_title     = excluded.boss_title,
-                initiator      = excluded.initiator,
-                chat_history   = excluded.chat_history,
-                resume_sent    = MAX(resume_sent, excluded.resume_sent),
-                updated_at     = excluded.updated_at
+                jobs_db_id      = excluded.jobs_db_id,
+                boss_name       = excluded.boss_name,
+                company         = excluded.company,
+                boss_title      = excluded.boss_title,
+                initiator       = excluded.initiator,
+                chat_history    = excluded.chat_history,
+                resume_sent     = MAX(resume_sent, excluded.resume_sent),
+                sent_self_promo = MAX(sent_self_promo, excluded.sent_self_promo),
+                updated_at      = excluded.updated_at
         """, (encrypt_job_id, jobs_db_id, boss_name, company, boss_title,
-              initiator, hist_json, resume_sent, now, now))
+              initiator, hist_json, resume_sent, sent_self_promo, now, now))
         c.commit()
 
 

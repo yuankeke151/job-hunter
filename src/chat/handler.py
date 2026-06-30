@@ -1,15 +1,12 @@
 """
 chat_handler.py — BOSS直聘 IM 聊天自动化处理
 
-轮询策略（CONTINUOUS_POLL=True）：
-  1. get_all_sessions → 过滤已处理(processed_eids) → for 循环按 DOM 顺序依次处理
-  2. 每次处理通过 encryptJobId 定位会话实际位置（列表可能已重排）
-  3. 处理数达到 POLL_LIMIT → 本轮结束，等 3-5s 开始下一轮
-  4. for 循环结束 → continue 回到 while 顶部重读列表
-  5. 重读后无新候选 → break 本轮结束（scroll_into_view_and_click 已自然触发懒加载）
-
-CONTINUOUS_POLL=False：
-  直接对当前右侧可见会话调用一次 process_session 后退出
+运行策略：
+  1. DIRECT_MODE=True → 直接处理当前右侧可见会话一次后退出（测试用）
+  2. DIRECT_MODE=False（默认）→ 轮询左侧会话列表，处理完一轮后退出：
+     get_all_sessions → 过滤已处理(processed_eids) → for 循环按 DOM 顺序依次处理
+     每次处理通过 encryptJobId 定位会话实际位置（列表可能已重排）
+     处理数达到 POLL_LIMIT 或列表耗尽 → 退出程序
 
 已验证的选择器（debug_chat2.py）：
   会话卡片  : .user-list-content > ul:nth-child(2) > li
@@ -35,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import CDP_CHAT_URL, POLL_LIMIT, CONTINUOUS_POLL
+from config import CDP_CHAT_URL, POLL_LIMIT, DIRECT_MODE
 from shared.cdp_utils import (random_delay, evaluate,
                               small_human_scroll, is_browser_alive,
                               silence_pychrome_recv_loop_noise,
@@ -123,103 +120,90 @@ def main():
     init_chat_db()
 
     _, tab = connect_tab()
+
+    if not is_browser_alive(CDP_URL):
+        log.info("[退出] 检测到浏览器已关闭，程序退出")
+        try: tab.stop()
+        except Exception: pass
+        sys.exit(1)
+
     try:
-        round_num = 0
-        while True:
-            if not is_browser_alive(CDP_URL):
-                log.info("[退出] 检测到浏览器已关闭，程序退出")
-                break
+        if DIRECT_MODE:
+            # 测试模式：不点击左侧，直接处理当前右侧可见会话，处理后退出
+            log.info("[轮询] 测试模式（DIRECT_MODE=True），处理当前右侧会话后退出")
+            process_session(tab, session_info=None)
+            log.info("[退出] 处理完成，程序结束")
+            try: tab.stop()
+            except Exception: pass
+            sys.exit(0)
 
-            round_num += 1
-            log.info(f"{'='*60}")
-            log.info(f"  [第 {round_num} 轮] {datetime.now().strftime('%H:%M:%S')}")
-            log.info(f"{'='*60}")
+        sessions = get_all_sessions(tab)
+        if not sessions:
+            log.info("[轮询] 未找到任何会话，退出")
+            try: tab.stop()
+            except Exception: pass
+            sys.exit(0)
 
-            try:
-                sessions = get_all_sessions(tab)
-            except Exception as e:
-                log.error(f"[退出] 获取会话列表失败（浏览器可能已关闭）: {e}")
-                break
+        log.info(f"[轮询] 共 {len(sessions)} 个可见会话")
 
-            if not sessions:
-                log.info("[轮询] 未找到任何会话，等待 10s 后重试...")
-                time.sleep(10)
+        processed_eids = set()
+        processed = 0
+        _JS_CUR_ID = ("(window.chat&&window.chat.communicating"
+                      "&&window.chat.communicating.encryptJobId)||''")
+
+        while processed < POLL_LIMIT:
+            sessions = get_all_sessions(tab)
+            candidates = [s for s in sessions
+                          if s["encryptJobId"] not in processed_eids]
+
+            if candidates:
+                for s in candidates:
+                    if processed >= POLL_LIMIT:
+                        break
+                    processed_eids.add(s["encryptJobId"])
+                    log.info(f"[轮询] ({processed+1}/{POLL_LIMIT}) "
+                             f"{s['name']}  {s['company']}  "
+                             f"未读={s.get('unread') or '0'}  time={s.get('time','')!r}")
+                    try:
+                        small_human_scroll(tab, lo=100, hi=350)
+                        target_id = s.get("encryptJobId", "")
+                        if not target_id:
+                            log.error(f"  [致命] 会话 {s.get('name','')} 无 encryptJobId，"
+                                      f"页面结构异常，程序退出")
+                            sys.exit(1)
+                        locate_js = (
+                            f"return Array.from(document.querySelectorAll({json.dumps(SESSION_LI)}))"
+                            f".find(li => li.__vue__ && li.__vue__.$props"
+                            f" && li.__vue__.$props.source"
+                            f" && li.__vue__.$props.source.encryptJobId === {json.dumps(target_id)});"
+                        )
+                        if not scroll_into_view_and_click(tab, locate_js, delay=None):
+                            log.warning(f"  [跳过] 未找到 encryptJobId={target_id[:20]} 的卡片"
+                                        f"（列表可能已重排），跳过本会话")
+                            continue
+                        for _ in range(16):
+                            cur_id = evaluate(tab, _JS_CUR_ID)
+                            if cur_id == target_id:
+                                break
+                            time.sleep(0.5)
+                        else:
+                            log.warning(f"  [警告] 右侧未切换到目标会话 {target_id[:20]}，"
+                                        f"当前={str(evaluate(tab, _JS_CUR_ID))[:20]}")
+                        random_delay(0.3, 0.5)
+                        process_session(tab, session_info=s)
+                        processed += 1
+                        random_delay(2.0, 3.0)
+                    except Exception as e:
+                        if not is_browser_alive(CDP_URL):
+                            log.error(f"[退出] 浏览器已关闭（会话处理中断）: {e}")
+                            sys.exit(0)
+                        log.error(f"  [错误] 会话 {s['name']} 处理异常，跳过: {e}")
                 continue
 
-            if not CONTINUOUS_POLL:
-                # 单次模式：不点击左侧，直接处理当前右侧可见会话，处理后退出
-                log.info("[轮询] 单次模式（CONTINUOUS_POLL=False），处理当前右侧会话后退出")
-                try:
-                    process_session(tab, session_info=None)
-                except Exception as e:
-                    if not is_browser_alive(CDP_URL):
-                        log.error(f"[退出] 浏览器已关闭: {e}")
-                    else:
-                        log.error(f"  [错误] 会话处理异常: {e}")
-                break
+            log.info(f"[轮询] 无更多未处理会话，本轮结束（已处理 {processed} 个）")
+            break
 
-            log.info(f"[轮询] 共 {len(sessions)} 个会话，本轮目标处理前 {POLL_LIMIT} 个")
-
-            processed_eids = set()  # 本轮已处理的 encryptJobId（不重复处理）
-            processed = 0         # 本轮实际处理数
-            _JS_CUR_ID = ("(window.chat&&window.chat.communicating"
-                          "&&window.chat.communicating.encryptJobId)||''")
-
-            while processed < POLL_LIMIT:
-                sessions = get_all_sessions(tab)
-                candidates = [s for s in sessions
-                              if s["encryptJobId"] not in processed_eids]
-
-                if candidates:
-                    for s in candidates:
-                        if processed >= POLL_LIMIT:
-                            break
-                        processed_eids.add(s["encryptJobId"])
-                        log.info(f"[轮询] ({processed+1}/{POLL_LIMIT}) "
-                                 f"{s['name']}  {s['company']}  "
-                                 f"未读={s.get('unread') or '0'}  time={s.get('time','')!r}")
-                        try:
-                            small_human_scroll(tab, lo=100, hi=350)
-                            target_id = s.get("encryptJobId", "")
-                            if not target_id:
-                                log.error(f"  [致命] 会话 {s.get('name','')} 无 encryptJobId，"
-                                          f"页面结构异常，程序退出")
-                                sys.exit(1)
-                            locate_js = (
-                                f"return Array.from(document.querySelectorAll({json.dumps(SESSION_LI)}))"
-                                f".find(li => li.__vue__ && li.__vue__.$props"
-                                f" && li.__vue__.$props.source"
-                                f" && li.__vue__.$props.source.encryptJobId === {json.dumps(target_id)});"
-                            )
-                            if not scroll_into_view_and_click(tab, locate_js, delay=None):
-                                log.warning(f"  [跳过] 未找到 encryptJobId={target_id[:20]} 的卡片"
-                                            f"（列表可能已重排），跳过本会话")
-                                continue
-                            for _ in range(16):
-                                cur_id = evaluate(tab, _JS_CUR_ID)
-                                if cur_id == target_id:
-                                    break
-                                time.sleep(0.5)
-                            else:
-                                log.warning(f"  [警告] 右侧未切换到目标会话 {target_id[:20]}，"
-                                            f"当前={str(evaluate(tab, _JS_CUR_ID))[:20]}")
-                            random_delay(0.3, 0.5)
-                            process_session(tab, session_info=s)
-                            processed += 1
-                            random_delay(2.0, 3.0)
-                        except Exception as e:
-                            if not is_browser_alive(CDP_URL):
-                                log.error(f"[退出] 浏览器已关闭（会话处理中断）: {e}")
-                                sys.exit(0)
-                            log.error(f"  [错误] 会话 {s['name']} 处理异常，跳过: {e}")
-                    continue  # 处理完当前批，回到 while 顶部重新读取列表
-
-                # 可见列表中无未处理会话 → 本轮结束
-                log.info(f"[轮询] 无更多未处理会话，本轮结束（已处理 {processed} 个）")
-                break
-
-            log.info(f"[轮询] 已处理 {processed} 个会话，从头开始下一轮")
-            random_delay(3.0, 5.0)
+        log.info(f"[退出] 处理完成（共 {processed} 个会话），程序结束")
 
     finally:
         try: tab.stop()

@@ -99,7 +99,7 @@ job-hunter/
 │   │   ├── handler.py           # 入口（原 chat_handler.py）：主循环、CDP 连接、会话列表轮询
 │   │   ├── session_processor.py # 会话读取、分析、写库（process_session）
 │   │   ├── session_actions.py   # 会话操作主入口/编排（execute_session_actions，场景A/B/C分支）
-│   │   ├── ai.py                # AI 自我推荐/回复生成（call_ai、_SYS_PROMPT）
+│   │   ├── ai.py                # AI 回复生成（call_ai、_SYS_PROMPT），自我介绍改用固定文案
 │   │   ├── messaging.py         # 输入框打字/发送（clear_and_type、click_send、type_and_log）
 │   │   ├── resume_dialog.py     # 默认简历发送弹窗/确认气泡处理（handle_resume_dialog、click_resume_btn）
 │   │   ├── resume_attachment.py # 定制简历附件管理全流程（execute_resume_action、上传/删除/会话卡定位）
@@ -314,27 +314,25 @@ city == TARGET_CITY 或 city 为空（无法读取时不过滤）：
 | 常量 | 默认值 | 说明 |
 |------|--------|------|
 | `CDP_CHAT_PORT` | `9222` | 聊天模块 Chrome 调试端口（与 scanner 共用同一 Chrome 实例） |
-| `CONTINUOUS_POLL` | `False` | `True`：持续轮询左侧会话列表；`False`：处理当前右侧可见会话一次后退出，且不点击左侧卡片 |
-| `POLL_LIMIT` | `5` | 单轮最多处理会话数（仅 `CONTINUOUS_POLL=True` 时生效） |
-| `REPLY_ENABLED` | `False` | `True`：正常发送自我推荐/AI 回复；`False`：只做卡片同意和发简历，不产生新消息，不调用 AI API |
-| `SEND_ENABLED` | `False` | `True`：点击发送按钮；`False`：只打入输入框，不点击发送（`REPLY_ENABLED=False` 时此开关无效） |
-| `DISCLAIMER` | `""` | 所有消息末尾附加的免责声明（暂时置空） |
-| `GENERATE_TAILORED_RESUME` | `True` | `True`：发简历时优先调用 `resume_tailor.generate_tailored_resume` 按 JD 生成定制简历并上传发送，失败则跳过该对话；`False`：始终发送默认固定简历（见 [chat/resume_attachment.py](src/chat/resume_attachment.py) `execute_resume_action`） |
+| `DIRECT_MODE` | `False` | `True`：直接处理当前右侧可见会话一次后退出（测试用）；`False`：正常轮询左侧列表 |
+| `POLL_LIMIT` | `5` | 单次运行最多处理会话数 |
+| `REPLY_ENABLED` | `False` | `True`：发送消息；`False`：只做卡片同意和发简历，不产生新消息，不调用 AI API |
+| `SEND_ENABLED` | `False` | `True`：点击发送按钮；`False`：只打入输入框不发送 |
+| `CONSERVATIVE_CHAT` | `True` | `True`：不回复 boss 消息，仅发简历后或场景 A 下发固定自我介绍；`False`：AI 生成回复 |
+| `SELF_PROMO_TEXT` | (固定文案) | 自我介绍固定文案，所有场景统一使用，不走 AI |
+| `DISCLAIMER` | (免责声明) | 所有消息末尾自动附加 |
+| `GENERATE_TAILORED_RESUME` | `True` | `True`：按 JD 生成定制简历上传发送；`False`：发送默认简历 |
 
-**`CONTINUOUS_POLL=False` 时的行为：**
-- 不遍历左侧会话列表，直接对当前右侧可见会话调用一次 `process_session(session_info=None)`，结束后退出
-- 不点击左侧会话卡片，右侧信息全部从 `window.chat.communicating` 和 DOM 读取，不存在左右侧数据错位问题
+**轮询策略（`DIRECT_MODE=False`）：**
 
-**`CONTINUOUS_POLL=True` 时的轮询策略（`processed_eids`/`candidates`）：**
-
-每轮维护 `processed_eids` 集合（本轮已处理过的 `encryptJobId`），内层 `while processed < POLL_LIMIT` 每次迭代都重新拉取最新会话列表：
+维护 `processed_eids` 集合（已处理的 `encryptJobId`），`while processed < POLL_LIMIT`：
 
 - `get_all_sessions` → 过滤已处理 → for 循环按 DOM 顺序依次处理所有候选
-- 每个候选通过 `scroll_into_view_and_click` + `encryptJobId` 精确定位点击（`scrollIntoView` 自然触发虚拟列表向下加载）
-- for 循环结束后 `continue` 回到 while 顶部重读列表，捡起新渲染的会话继续处理
-- 重读后无新候选 → `break` 退出本轮，等待 3–5s 后开始下一轮
+- 每个候选通过 `scroll_into_view_and_click` + `encryptJobId` 精确定位（自然触发虚拟列表懒加载）
+- for 循环结束后 `continue` 重读列表，捡起新渲染的会话
+- 重读后无新候选 → `break`，程序退出
 
-**不考虑未读消息数量**，不考虑手动翻页（`cdp_wheel`/`scrollBy`），`scroll_into_view_and_click` 逐个定位时已自然触发懒加载。
+**不考虑未读消息数量**，不考虑手动翻页。
 
 > **encryptJobId 来源**：`_JS_GET_SESSIONS` 从 `li.__vue__.$props.source.encryptJobId` 读取，不依赖 href 解析。读取失败（空字符串）视为致命错误，`sys.exit(1)` 直接终止。
 
@@ -344,7 +342,7 @@ city == TARGET_CITY 或 city 为空（无法读取时不过滤）：
 **`REPLY_ENABLED=False` 时的行为：**
 - `handle_interactive_cards`（卡片同意）和 `execute_resume_action`（发简历）正常执行
 - 所有 `_type_and_log` 调用只打印日志，不操作输入框也不点击发送
-- 所有 `call_ai` 调用直接跳过，不发出 API 请求
+- 所有消息发送（含固定自我介绍和 AI 回复）跳过，不发出 API 请求
 
 **`SEND_ENABLED=False` 时的行为：**
 - 文字正常打入输入框，等待延时后 return，不点击发送按钮
@@ -414,7 +412,7 @@ city == TARGET_CITY 或 city 为空（无法读取时不过滤）：
 | `src/shared/database.py` | SQLite CRUD（jobs + chats 两张表） |
 | `src/chat/session_processor.py` | `process_session`：阶段一读取分析 + 阶段二写库 |
 | `src/chat/session_actions.py` | `execute_session_actions`：会话操作主入口/编排（场景 A/B/C 分支），重新导出 `fetch_job_detail_via_view_job` 供 `session_processor` 使用 |
-| `src/chat/ai.py` | `call_ai`、`_SYS_PROMPT`、`_fmt_history`：AI 自我推荐/回复生成 |
+| `src/chat/ai.py` | `call_ai`、`_SYS_PROMPT`、`_fmt_history`：AI 回复生成（自我介绍已改用固定文案 `SELF_PROMO_TEXT`） |
 | `src/chat/messaging.py` | `clear_and_type`、`click_send`、`type_and_log`：输入框打字/发送与统一日志输出 |
 | `src/chat/resume_dialog.py` | `handle_resume_dialog`、`click_resume_btn`、`_handle_resume_confirm_popover`：默认简历的发送弹窗/确认气泡处理 |
 | `src/chat/resume_attachment.py` | `execute_resume_action`（简历操作分发，按 `GENERATE_TAILORED_RESUME` 决定走定制简历还是默认简历）、`upload_resume_attachment`/`delete_resume_attachment`/`click_session_card`/`_FileChooserCatcher` 等定制简历附件管理全套流程 |
@@ -507,41 +505,31 @@ db_resume_sent=True       → resume_already_sent=True
 
 #### 阶段三：执行操作（委托 execute_session_actions）
 
-不再区分「有 JD / 无 JD」两套流程——`jd` 为空时 `call_ai` 仍用同一套 `_SYS_PROMPT`，JD 段落自然为空，AI 根据聊天记录和简历自行生成内容。固定话术常量（原 `FIXED_SELF_INTRO`/`FIXED_FOLLOWUP`）已移除。
+自我介绍使用 `config.SELF_PROMO_TEXT` 固定文案，不走 AI。`call_ai` 仅生成回复，返回字符串（空字符串表示失败）。
 
 **Step 1（无条件）：`handle_interactive_cards(tab)`**
 
-```
-循环：每轮重新调用 _read_agree_cards(tab) 读取当前可点击「同意」的卡片坐标
-  从列表中找第一张「非简历请求卡」（cardType != 'resume'）
-    找到 → cdp_click 同意，等待 1.5-2.5s（系统可能自动插入消息，坐标会变化），继续下一轮
-    找不到（全是简历卡或无卡片）→ 结束循环
-简历请求卡始终跳过，不在此处处理（留给 Step 2 按场景统一处理）。
-固定返回 False。
-```
+循环处理非简历交互卡片「同意」按钮，简历请求卡留给 Step 2。
 
 **Step 2：按 `my_texts` / `boss_texts` 是否为空分三种场景**
 
 ```
 场景C：my_texts 为空（Boss 主动发起，我方无消息）
-  → execute_resume_action(tab)（成功则 resume_sent_now=1，等待 1-2s；失败则 return 跳过该对话）
-  → _send_self_promo("自我介绍")  # call_ai(need_self_promo=True, need_reply=False)
+  → execute_resume_action（失败则 return）
+  → _send_self_promo("自我介绍")  # 固定文案，检查 sent_self_promo 去重
 
 场景A：boss_texts 为空（我方主动发起，Boss 尚未回复）
-  → _send_self_promo("自我推荐")  # call_ai(need_self_promo=True, need_reply=False)
+  → _send_self_promo("自我推荐")  # 固定文案，检查 sent_self_promo 去重
 
 场景B：双方均有消息
-  if not resume_already_sent → execute_resume_action(tab)（成功则 resume_sent_now=1，等待 1-2s；失败则 return 跳过该对话）
-  need_self_promo = (resume_sent_now == 1)
-  need_reply      = last_is_boss
-  REPLY_ENABLED=False → 跳过；need_self_promo 和 need_reply 均为 False → 跳过 API 调用
-  否则 → call_ai(jd, salary, need_self_promo, need_reply)：
-    先发 self_promo（若 need_self_promo），延迟 2-3s，再发 reply（若 need_reply）
+  if not resume_already_sent → execute_resume_action（失败则 return）
+  need_self_promo = (resume_sent_now == 1 AND not self_promo_already_sent)
+  need_reply      = False if CONSERVATIVE_CHAT else last_is_boss
+  若 need_self_promo → _send_self_promo（固定文案）
+  若 need_reply AND not CONSERVATIVE_CHAT → call_ai(jd, salary) 生成回复
 ```
 
-`_send_self_promo` 内部统一调用 `call_ai(need_reply=False, need_self_promo=True, salary=salary)` 并发送返回的 `self_promo`（原 `call_ai_self_promo` 已合并入 `call_ai`，按 `need_self_promo`/`need_reply` 标志位决定生成哪些字段）。
-
-`call_ai(boss_info, jd, resume, messages, need_reply, need_self_promo=False, salary="")`：`salary` 与 `jd` 同链路获取并透传（见上文「薪资字段（chat 聊天页）」），函数内部按 `analyzer.py` 同款写法构造 `salary_line = f"薪资范围：{salary}\n" if salary else ""` 并嵌入 `jd_section`，与 JD 一并发给 AI 作为生成自我推荐/回复的参考依据（对应 `_SYS_PROMPT` 中"根据职位JD（含薪资范围，如有）..."的描述）。
+**去重机制**：`sent_self_promo` 字段（chats 表，`INTEGER DEFAULT 0`），DB 读取 + DOM 检测（匹配 `SELF_PROMO_TEXT` 前缀）双重判断是否已发送，`upsert_chat` 用 `MAX` 单调递增。
 
 `execute_resume_action(tab, company, jd, target)`（`src/chat/resume_attachment.py`）按 `GENERATE_TAILORED_RESUME` 分发：
 
@@ -598,6 +586,7 @@ B. 附件数 == 1 → 非模态确认气泡 .panel-resume.sentence-popover（标
 | `initiator` | TEXT | 发起方：`"me"`=我主动 / `"boss"`=对方主动 |
 | `chat_history` | TEXT | JSON 数组，每条含 from/text/time/status/isCard |
 | `resume_sent` | INTEGER | 0=未发 1=已发（任何方式） |
+| `sent_self_promo` | INTEGER | 0=未发 1=已发自我介绍 |
 | `created_at` | TEXT | 首次写入时间 |
 | `updated_at` | TEXT | 最后更新时间 |
 
