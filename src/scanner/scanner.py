@@ -134,6 +134,9 @@ def scan_page():
                     if existing_job.get("should_apply", -1) == 0:
                         log.info(f"[{idx+1:02d}] {name}  ·  {company}  → [DB] 不推荐，跳过")
                         divider(); random_delay(1, 3); continue
+                    if existing_job.get("should_apply", -1) == 1 and not SCAN_GREET_ENABLED:
+                        log.info(f"[{idx+1:02d}] {name}  ·  {company}  → [DB] 已推荐但打招呼已禁用，跳过")
+                        divider(); random_delay(1, 3); continue
                     # 存在但未打招呼且 should_apply != 0（可能是 -1 未分析 或 1 推荐但未沟通成功）
                     re_process = True
                     log.info(f"[{idx+1:02d}] {name}  ·  {company}  → [DB] 已存储(id={existing_job['id']})但未沟通，重新处理")
@@ -176,25 +179,40 @@ def scan_page():
                     if city:
                         log.info(f"      城市: {city}")
 
-                    # ── 非目标城市：DB去重后只入库，跳过解析和沟通 ───────────
+                    # ── 非目标城市：只入库，跳过解析和沟通 ───────────
                     if city and city != TARGET_CITY:
                         log.info(f"      [城市] {city} ≠ {TARGET_CITY}，跳过解析")
                         if jd:
-                            rowid = save_job(
-                                job_id       = encrypt_job_id,
-                                company      = company,
-                                position     = name,
-                                jd           = jd,
-                                experience   = card.get("experience", ""),
-                                education    = card.get("education", ""),
-                                company_size = card.get("company_size", ""),
-                                salary       = salary,
-                                salary_ok    = 1 if salary_ok else 0,
-                                city         = city,
-                                recruiter_name  = recruiter_name,
-                                recruiter_title = recruiter_title,
-                            )
-                            log.info(f"      [DB] 已保存 (id={rowid}, 非目标城市)")
+                            if re_process:
+                                update_job_by_encrypt_id(
+                                    encrypt_job_id,
+                                    jd             = jd,
+                                    experience      = card.get("experience", ""),
+                                    education       = card.get("education", ""),
+                                    company_size    = card.get("company_size", ""),
+                                    salary          = salary,
+                                    salary_ok       = 1 if salary_ok else 0,
+                                    city            = city,
+                                    recruiter_name  = recruiter_name,
+                                    recruiter_title = recruiter_title,
+                                )
+                                log.info(f"      [DB] 已更新 (非目标城市)")
+                            else:
+                                rowid = save_job(
+                                    job_id       = encrypt_job_id,
+                                    company      = company,
+                                    position     = name,
+                                    jd           = jd,
+                                    experience   = card.get("experience", ""),
+                                    education    = card.get("education", ""),
+                                    company_size = card.get("company_size", ""),
+                                    salary       = salary,
+                                    salary_ok    = 1 if salary_ok else 0,
+                                    city         = city,
+                                    recruiter_name  = recruiter_name,
+                                    recruiter_title = recruiter_title,
+                                )
+                                log.info(f"      [DB] 已保存 (id={rowid}, 非目标城市)")
                         divider()
                         random_delay(1, 3)
                         continue

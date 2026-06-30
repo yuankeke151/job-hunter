@@ -198,7 +198,8 @@ def upsert_chat(
                 company         = excluded.company,
                 boss_title      = excluded.boss_title,
                 initiator       = excluded.initiator,
-                chat_history    = excluded.chat_history,
+                chat_history    = CASE WHEN LENGTH(excluded.chat_history) >= LENGTH(chat_history)
+                                      THEN excluded.chat_history ELSE chat_history END,
                 resume_sent     = MAX(resume_sent, excluded.resume_sent),
                 sent_self_promo = MAX(sent_self_promo, excluded.sent_self_promo),
                 updated_at      = excluded.updated_at
@@ -274,18 +275,24 @@ def update_job_by_encrypt_id(
             """
             UPDATE jobs SET
                 jd = CASE WHEN ? != '' THEN ? ELSE jd END,
-                experience = ?, education = ?, company_size = ?,
+                experience   = CASE WHEN ? != '' THEN ? ELSE experience   END,
+                education    = CASE WHEN ? != '' THEN ? ELSE education    END,
+                company_size = CASE WHEN ? != '' THEN ? ELSE company_size END,
                 salary = ?, salary_ok = ?, city = ?,
-                recruiter_name = ?, recruiter_title = ?,
+                recruiter_name  = CASE WHEN ? != '' THEN ? ELSE recruiter_name  END,
+                recruiter_title = CASE WHEN ? != '' THEN ? ELSE recruiter_title END,
                 greeted = ?, score = ?, should_apply = ?,
                 key_matches = ?, missing_skills = ?, skip_reason = ?,
                 updated_at = ?
             WHERE job_id = ?
             """,
             (
-                jd, jd, experience, education, company_size,
+                jd, jd,
+                experience, experience, education, education,
+                company_size, company_size,
                 salary, salary_ok, city,
-                recruiter_name, recruiter_title,
+                recruiter_name, recruiter_name,
+                recruiter_title, recruiter_title,
                 greeted, score, should_apply,
                 json.dumps(key_matches or [], ensure_ascii=False),
                 json.dumps(missing_skills or [], ensure_ascii=False),
