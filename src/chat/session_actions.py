@@ -68,7 +68,7 @@ def execute_session_actions(
         type_and_log(tab, SELF_PROMO_TEXT, company[:10])
 
     if not my_texts:
-        # 场景C: Boss 主动发起，我方无消息 → 发简历 + AI 自我介绍
+        # 场景C: Boss 主动发起，我方无消息 → 发简历 + 固定自我介绍
         log.info("  [场景C] Boss 主动发起，我方无消息 → 发简历 + 自我介绍")
         ok = execute_resume_action(tab, company=company, jd=jd, target=target)
         if ok:
@@ -80,8 +80,8 @@ def execute_session_actions(
         _send_self_promo("自我介绍")
 
     elif not boss_texts:
-        # 场景A: 我方主动发起，Boss 尚未回复 → AI 自我推荐
-        log.info("  [场景A] 我方主动发起，Boss 尚未回复 → AI 自我推荐")
+        # 场景A: 我方主动发起，Boss 尚未回复 → 固定自我介绍
+        log.info("  [场景A] 我方主动发起，Boss 尚未回复 → 固定自我介绍")
         _send_self_promo("自我推荐")
 
     else:
