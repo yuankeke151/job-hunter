@@ -62,14 +62,14 @@ def execute_session_actions(
             log.info("  [自我介绍] REPLY_ENABLED=False，跳过消息发送")
             return
         if self_promo_already_sent:
-            log.info(f"  [自我介绍] 已发送过，跳过（去重）")
+            log.info(f"  [自我介绍] 已发送过，跳过")
             return
         log.info(f"  [自我介绍] 发送固定{action_label}（{len(SELF_PROMO_TEXT)} 字）")
         type_and_log(tab, SELF_PROMO_TEXT, company[:10])
 
     if not my_texts:
         # 场景C: Boss 主动发起，我方无消息 → 发简历 + AI 自我介绍
-        log.info("  [场景C] Boss 主动发起，我方无消息 → 发简历 + AI 自我介绍")
+        log.info("  [场景C] Boss 主动发起，我方无消息 → 发简历 + 自我介绍")
         ok = execute_resume_action(tab, company=company, jd=jd, target=target)
         if ok:
             resume_sent_now = 1
@@ -98,7 +98,7 @@ def execute_session_actions(
                 log.info("  → 简历操作失败，跳过该对话")
                 return
 
-        need_self_promo = resume_sent_now == 1 and not self_promo_already_sent
+        need_self_promo = resume_sent_now == 1
         need_reply      = False if CONSERVATIVE_CHAT else last_is_boss
         if need_self_promo:
             _send_self_promo("自我推荐")

@@ -72,6 +72,8 @@ def _render_char(tab, ch: str, font: str) -> list[int] | None:
 
 
 def _mse(a: list[int], b: list[int]) -> float:
+    if not a:
+        return float("inf")
     return sum((x - y) ** 2 for x, y in zip(a, b)) / len(a)
 
 

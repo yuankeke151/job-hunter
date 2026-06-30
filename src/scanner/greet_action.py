@@ -26,11 +26,10 @@ def try_greet(tab) -> int:
     if not btn_raw:
         log.warning("      [沟通] 未找到「立即沟通」按钮，跳过")
         return 0
-    if not json.loads(btn_raw).get("visible"):
+    btn = json.loads(btn_raw)
+    if not btn.get("visible"):
         log.warning("      [沟通] 按钮不可见，跳过")
         return 0
-
-    btn        = json.loads(btn_raw)
     url_before = evaluate(tab, "window.location.href") or ""
     cdp_click(tab, btn["x"], btn["y"])
     random_delay(1.0, 1.5)
