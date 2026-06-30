@@ -3,7 +3,7 @@ from pathlib import Path
 import pdfplumber
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import RESUME_PATH
+from config import RESUME_PATH, SELF_PROMO_TEXT
 from shared.cdp_utils import evaluate, read_messages
 from shared.database import (get_chat, upsert_chat, save_job_from_view_detail,
                               get_job_by_encrypt_id)
@@ -130,9 +130,10 @@ def process_session(tab, session_info: dict | None = None):
         )
         last_is_boss = _last_text_msg is not None and not _last_text_msg["isSelf"]
 
-        # 6. 简历状态检测（纯读取，不操作）
-        existing       = get_chat(encrypt_job_id) if encrypt_job_id else None
-        db_resume_sent = bool((existing or {}).get("resume_sent", 0))
+        # 6. 简历状态 & 自我介绍状态检测（纯读取，不操作）
+        existing              = get_chat(encrypt_job_id) if encrypt_job_id else None
+        db_resume_sent        = bool((existing or {}).get("resume_sent", 0))
+        db_sent_self_promo    = bool((existing or {}).get("sent_self_promo", 0))
 
         if db_resume_sent:
             resume_already_sent = True
@@ -145,7 +146,21 @@ def process_session(tab, session_info: dict | None = None):
             if resume_already_sent:
                 log.info("  → 系统消息：简历已发送过")
 
-        log.info(f"  简历状态: already_sent={resume_already_sent}")
+        # 自我介绍前缀（取固定文案前 30 字做子串匹配，避免 DOM 截断误差）
+        _promo_prefix = SELF_PROMO_TEXT[:30]
+        if db_sent_self_promo:
+            self_promo_already_sent = True
+            log.info("  → 数据库：自我介绍已发送过")
+        else:
+            self_promo_already_sent = any(
+                _promo_prefix in m.get("text", "")
+                for m in messages if m["isSelf"] and not m["isCard"]
+            )
+            if self_promo_already_sent:
+                log.info("  → DOM检测：自我介绍已发送过")
+
+        log.info(f"  简历状态: already_sent={resume_already_sent}"
+                 f"  self_promo_already_sent={self_promo_already_sent}")
 
         # 7. 加载简历
         resume = load_resume()
@@ -187,16 +202,18 @@ def process_session(tab, session_info: dict | None = None):
                 for m in messages
             ]
             upsert_chat(
-                encrypt_job_id = encrypt_job_id,
-                jobs_db_id     = jobs_db_id,
-                boss_name      = boss_name,
-                company        = company,
-                boss_title     = boss_title,
-                initiator      = initiator,
-                chat_history   = history_list,
-                resume_sent    = 1 if resume_already_sent else 0,
+                encrypt_job_id  = encrypt_job_id,
+                jobs_db_id      = jobs_db_id,
+                boss_name       = boss_name,
+                company         = company,
+                boss_title      = boss_title,
+                initiator       = initiator,
+                chat_history    = history_list,
+                resume_sent     = 1 if resume_already_sent else 0,
+                sent_self_promo = 1 if self_promo_already_sent else 0,
             )
-            log.info(f"  [DB] 已写入当前状态（resume_sent={1 if resume_already_sent else 0}）")
+            log.info(f"  [DB] 已写入当前状态（resume_sent={1 if resume_already_sent else 0}"
+                     f"  sent_self_promo={1 if self_promo_already_sent else 0}）")
         else:
             log.info("  [DB] 无 encryptJobId，跳过写库")
 
@@ -205,16 +222,17 @@ def process_session(tab, session_info: dict | None = None):
         # ══════════════════════════════════════════════════════════════
 
         execute_session_actions(
-            tab                 = tab,
-            my_texts            = my_texts,
-            boss_texts          = boss_texts,
-            last_is_boss        = last_is_boss,
-            resume_already_sent = resume_already_sent,
-            resume              = resume,
-            jd                  = jd,
-            salary              = salary,
-            chat_info         = chat_info,
-            messages            = messages,
+            tab                      = tab,
+            my_texts                 = my_texts,
+            boss_texts               = boss_texts,
+            last_is_boss             = last_is_boss,
+            resume_already_sent      = resume_already_sent,
+            self_promo_already_sent  = self_promo_already_sent,
+            resume                   = resume,
+            jd                       = jd,
+            salary                   = salary,
+            chat_info                = chat_info,
+            messages                 = messages,
         )
 
     except Exception as e:
