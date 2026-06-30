@@ -69,14 +69,17 @@ def execute_session_actions(
 
     if not my_texts:
         # 场景C: Boss 主动发起，我方无消息 → 发简历 + 固定自我介绍
-        log.info("  [场景C] Boss 主动发起，我方无消息 → 发简历 + 自我介绍")
-        ok = execute_resume_action(tab, company=company, jd=jd, target=target)
-        if ok:
-            resume_sent_now = 1
-            random_delay(1.0, 2.0)
+        log.info("  [场景C] Boss 主动发起，我方无消息")
+        if resume_already_sent:
+            log.info("  → 简历已投递过，跳过简历环节")
         else:
-            log.info("  → 简历操作失败，跳过该对话")
-            return
+            ok = execute_resume_action(tab, company=company, jd=jd, target=target)
+            if ok:
+                resume_sent_now = 1
+                random_delay(1.0, 2.0)
+            else:
+                log.info("  → 简历操作失败，跳过该对话")
+                return
         _send_self_promo("自我介绍")
 
     elif not boss_texts:
